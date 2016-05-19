@@ -1,5 +1,5 @@
 SRC := $(wildcard *.go)
-TARGET := hipsterd
+TARGET := gx-cookie-proxy
 
 all: $(TARGET)
 

@@ -2,9 +2,17 @@ package main
 
 import (
 	"bufio"
+	"regexp"
+	"time"
+	"database/sql"
+	        "github.com/patrickmn/go-cache"
+
+	"encoding/hex"
 	"flag"
 	"fmt"
 	goconf "github.com/akrennmair/goconf"
+	_ "github.com/lib/pq"
+	"golang.org/x/crypto/blowfish"
 	"io"
 	"log"
 	"net"
@@ -16,7 +24,13 @@ import (
 type Backend struct {
 	Name          string
 	ConnectString string
+	GalaxyDB      *sql.DB
+	GalaxyCipher  *blowfish.Cipher
+	Cache *cache.Cache
 }
+
+var hexReg, _ = regexp.Compile("[^a-fA-F0-9]+")
+
 
 type Frontend struct {
 	Name         string
@@ -88,8 +102,9 @@ func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Header.Add("X-Forwarded-For", remote_addr)
 	}
 
+	var backend *Backend
 	if len(h.Frontend.Hosts) == 0 {
-		backend := <-h.Backends
+		backend = <-h.Backends
 		r.URL.Host = backend.ConnectString
 		h.Backends <- backend
 	} else {
@@ -99,12 +114,12 @@ func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "no suitable backend found for request", http.StatusServiceUnavailable)
 				return
 			} else {
-				backend := <-h.Backends
+				backend = <-h.Backends
 				r.URL.Host = backend.ConnectString
 				h.Backends <- backend
 			}
 		} else {
-			backend := <-backend_list
+			backend = <-backend_list
 			r.URL.Host = backend.ConnectString
 			backend_list <- backend
 		}
@@ -112,16 +127,29 @@ func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	conn_hdr := ""
 	conn_hdrs := r.Header["Connection"]
-	log.Printf("Connection headers: %v", conn_hdrs)
+
+	//log.Printf("Connection headers: %v", conn_hdrs)
 	if len(conn_hdrs) > 0 {
 		conn_hdr = conn_hdrs[0]
 	}
 
+	gx_cookie, err := r.Cookie("galaxysession")
+	var email = ""
+	if err == nil {
+		email, _ = lookupEmailByCookie(backend, gx_cookie.String())
+		if email != "" {
+			r.Header["REMOTE_USER"] = []string{email}
+			log.Printf("Authenticated request for %s", email)
+		}
+	}
+
 	upgrade_websocket := false
 	if strings.ToLower(conn_hdr) == "upgrade" {
-		log.Printf("got Connection: Upgrade")
+		//log.Printf("got Connection: Upgrade")
+
+
 		upgrade_hdrs := r.Header["Upgrade"]
-		log.Printf("Upgrade headers: %v", upgrade_hdrs)
+		//log.Printf("Upgrade headers: %v", upgrade_hdrs)
 		if len(upgrade_hdrs) > 0 {
 			upgrade_websocket = (strings.ToLower(upgrade_hdrs[0]) == "websocket")
 		}
@@ -180,9 +208,42 @@ func usage() {
 	os.Exit(1)
 }
 
+func lookupEmailByCookie(b *Backend, cookie string) (string, bool){
+
+	cachedEmail, found := b.Cache.Get(cookie[14:])
+	if found {
+		return cachedEmail.(string), found
+	}
+
+	data, err := hex.DecodeString(cookie[14:])
+	pt := make([]byte, 40)
+	for i := 0; i < len(data); i+= blowfish.BlockSize {
+		j := i + blowfish.BlockSize
+		b.GalaxyCipher.Decrypt(pt[i:j], data[i:j])
+	}
+	session_key := strings.Replace(string(pt), "!", "", -1)
+	safe_session_key := hexReg.ReplaceAllString(session_key, "")
+	//err := db.QueryRow(`INSERT INTO users(name, favorite_fruit, age)
+		//VALUES('beatrice', 'starfruit', 93) RETURNING id`).Scan(&userid)
+
+	var email string
+	err = b.GalaxyDB.QueryRow(`
+SELECT galaxy_user.email
+FROM galaxy_session, galaxy_user
+WHERE galaxy_user.id = galaxy_session.user_id and galaxy_session.session_key=$1`,
+	safe_session_key,
+	).Scan(&email)
+
+	if err != nil {
+		return "", false
+	}
+
+	b.Cache.Set(cookie[14:], email, cache.DefaultExpiration)
+	return email, false
+}
+
 func main() {
 	var cfgfile *string = flag.String("config", "", "configuration file")
-
 	backends := make(map[string]*Backend)
 	hosts := make(map[string][]*Backend)
 	frontends := make(map[string]*Frontend)
@@ -218,12 +279,39 @@ func main() {
 				log.Printf("backend section has no name, ignoring.")
 				continue
 			}
+			gx_connect_str, _ := cfg.GetString(section, "galaxy_dburl")
+			var db *sql.DB
+			if gx_connect_str == "" {
+				log.Printf("empty galaxy_dburl string for backend %s, ignoring.", tokens[1])
+				continue
+			} else {
+				db, err = sql.Open("postgres", gx_connect_str)
+			}
+
+			gx_secret, _ := cfg.GetString(section, "galaxy_secret")
+			var bf *blowfish.Cipher
+			if gx_secret == "" {
+				log.Printf("empty galaxy_secret string for backend %s, ignoring.", tokens[1])
+				continue
+			} else {
+				bf, err = blowfish.NewCipher([]byte(gx_secret))
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
+
 			connect_str, _ := cfg.GetString(section, "connect")
 			if connect_str == "" {
 				log.Printf("empty connect string for backend %s, ignoring.", tokens[1])
 				continue
 			}
-			b := &Backend{Name: tokens[1], ConnectString: connect_str}
+			b := &Backend{
+				Name:          tokens[1],
+				ConnectString: connect_str,
+				GalaxyDB:      db,
+				GalaxyCipher:  bf,
+				Cache:         cache.New(1*time.Hour, 5*time.Minute),
+			}
 			backends[b.Name] = b
 		}
 	}

@@ -1,0 +1,10 @@
+hash: c9e7abecc422dd16fd79306947aceefa02ba915e0cacacd91ba17f3580f39271
+updated: 2016-05-19T16:50:49.111914513Z
+imports:
+- name: github.com/akrennmair/goconf
+  version: c6367f3454b878fac129755a155b43a35fa992a6
+- name: github.com/lib/pq
+  version: ee1442bda7bd1b6a84e913bdb421cb1874ec629d
+  subpackages:
+  - oid
+devImports: []
