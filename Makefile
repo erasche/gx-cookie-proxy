@@ -8,6 +8,9 @@ deps:
 
 all: $(TARGET) deps
 
+release:
+	goxc -bc="linux" -d=downloads
+
 $(TARGET): $(SRC)
 	go build -o $@
 

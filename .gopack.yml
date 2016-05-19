@@ -1,0 +1,16 @@
+author: Eric Rasche
+description: Galaxy session cookie to remote_user proxy
+os: darwin linux windows
+includes:
+  - README.md
+  - LICENSE
+  - conf
+  - templates
+  - public
+  - static
+  - views
+excludes:
+  - \.git
+script:
+  - go get -v
+  - go build
