@@ -147,7 +147,7 @@ func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	upgrade_websocket := false
 	if strings.ToLower(conn_hdr) == "upgrade" {
-		//log.Printf("got Connection: Upgrade")
+		log.Printf("got Connection: Upgrade")
 
 		upgrade_hdrs := r.Header["Upgrade"]
 		//log.Printf("Upgrade headers: %v", upgrade_hdrs)
@@ -313,7 +313,6 @@ func main2(galaxyDb, galaxySecret, listenAddr, connect string) {
 		AddForwarded: true,
 	}
 
-	count := 0
 	exit_chan := make(chan int)
 	go func(fe *Frontend) {
 		var accesslogger *log.Logger
@@ -322,9 +321,7 @@ func main2(galaxyDb, galaxySecret, listenAddr, connect string) {
 	}(frontend)
 
 	// this shouldn't return
-	for i := 0; i < count; i++ {
-		<-exit_chan
-	}
+	<-exit_chan
 }
 
 func (f *Frontend) Start(backend *Backend, logger *log.Logger) {

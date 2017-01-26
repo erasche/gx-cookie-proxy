@@ -1,46 +1,61 @@
-gx-cookie-proxy
-===============
+# gx-cookie-proxy
 
-gx-cookie-proxy is a WebSocket-aware SSL-capable HTTP reverse proxy/load
-balancer based on [drunken-hipster](https://github.com/joinmytalk/drunken-hipster)
+gx-cookie-proxy is a WebSocket-aware SSL-capable HTTP reverse proxy based on
+[drunken-hipster](https://github.com/joinmytalk/drunken-hipster)
 
-Building
---------
+## Deployment
 
-First, make sure you have the Go build environment correctly installed. See
-http://golang.org/ for more information.
+### Pre-requisites
 
-Then run "make". This will in turn call the go utility to build the load
-balancer, resulting in a binary named hipsterd.
+1. You are already running some sort of proxy, such as Apache2 or NGINX
+2. You have deployed a Galaxy server with Postgres as the database
 
+## Deployment
 
-Configuration
--------------
+Download the binary from our [releases page](https://github.com/erasche/gx-cookie-proxy/releases) and run it:
 
-A simple configuration example:
+```console
+./gx-cookie-proxy \
+	--galaxyDb 'postgresql://postgres:postgres@localhost:32769/postgres?client_encoding=utf8&sslmode=disable' \
+	--galaxySecret 'I_LOVE_ICE_CREAM' \ # As it appears in galaxy.ini
+	--listenAddr localhost:5000 \ # Address to listen on
+	--connect localhost:8080 # The backend you're connecting to
+```
 
-    [frontend frontend1]
-    bind = 0.0.0.0:9000
-    backends = backend1
-    add-x-forwarded-for = true
+This will cause the proxy to:
 
-    [backend backend1]
-    connect = icanhazip.com
-    galaxy_dburl = postgresql://galaxy:galaxy@localhost:32777/galaxy?client_encoding=utf8&sslmode=disable
-    galaxy_secret = USING THE DEFAULT IS NOT SECURE!
+- create a tunnel between frontend and backend
+- connect to the database in order to decrypt cookies into usernames
 
-This is probably the simplest example possible. It defines a frontend that
-binds to `0.0.0.0:9000`, and forwards all its incoming requests to only one
-backend. This backend will send these forwarded requests to `icanhazip.com`
-with the appropriate `REMOTE_USER` setting if the user is logged in..
+On the first request, the proxy will check the cookie and attempt to decrypt it
+based on the secret and the session in the database (i.e. an active galaxy
+session MUST be present).
 
-License
--------
+On subsequent requests, the proxy will check its cache for that cookie value,
+improving performance. Cookies are cached for a maximum of one hour. This can
+be made configurable if someone requests it.
 
-See the file LICENSE for license information.
+## Configuration
 
-Author
-------
+Example apache2 configuration:
 
-Drunken Hipster - Andreas Krennmair <ak@synflood.at>
+```apache2
+ProxyPass  /galaxy/gxc_proxy http://localhost:5000/galaxy/gxc_proxy
+<Location "/galaxy/gxc_proxy">
+	ProxyPassReverse http://localhost:5000/galaxy/gxc_proxy
+</Location>
+```
+
+This will connect to your backend service (running on `localhost:8080`), and
+proxy requests to the backend. The backend service should either listen on
+`/galaxy/gxc_proxy/.*`, or should use completely relative paths rather than
+absolute.
+
+# License
+
+MIT
+
+# Authors
+
+Original Drunken Hipster Proxy - Andreas Krennmair <ak@synflood.at>
 Galaxy Portions - Eric Rasche <esr@tamu.edu>
