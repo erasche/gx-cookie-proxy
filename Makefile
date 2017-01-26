@@ -1,20 +1,41 @@
 SRC := $(wildcard *.go)
 TARGET := gx-cookie-proxy
+VERSION := $(shell git describe --tags)
 
-deps:
+all: $(TARGET)
+
+vendor: glide.yaml glide.lock
 	go get github.com/Masterminds/glide/...
 	go install github.com/Masterminds/glide/...
 	glide install
 
-all: $(TARGET) deps
+gofmt: $(src)
+	find $(SRC) -exec gofmt -w '{}' \;
 
-release:
-	goxc -bc="linux"
+qc_deps:
+	go get github.com/alecthomas/gometalinter
+	gometalinter --install --update
 
-$(TARGET): $(SRC)
-	go build -o $@
+qc: lint vet complexity
+	golint $(SRC)
+	gocyclo -over 10 $(SRC)
+	gometalinter .
+
+test: $(SRC) vendor gofmt
+	go test -v $(glide novendor)
+
+$(TARGET): $(SRC) vendor gofmt
+	go build -ldflags "-X main.version=$(VERSION) -X main.builddate=`date -u +%Y-%m-%dT%H:%M:%SZ`" -o $@
 
 clean:
 	$(RM) $(TARGET)
 
-.PHONY: clean
+release:
+	rm -rf dist/
+	mkdir dist
+	go get github.com/mitchellh/gox
+	go get github.com/tcnksm/ghr
+	gox -ldflags "-X main.version=$(VERSION) -X main.builddate=`date -u +%Y-%m-%dT%H:%M:%SZ`" -output "dist/gx-cookie-proxy_{{.OS}}_{{.Arch}}" -osarch="linux/amd64"
+	ghr -u erasche $(VERSION) -replace dist/
+
+.PHONY: clean lint gofmt vet complexity qc qc_deps test clean release

@@ -337,12 +337,12 @@ func (f *Frontend) Start(backend *Backend, logger *log.Logger) {
 
 	var request_handler http.Handler = &RequestHandler{
 		Transport: &http.Transport{
-			DisableKeepAlives: false,
+			DisableKeepAlives:  false,
 			DisableCompression: false,
 		},
-		Frontend: f,
+		Frontend:     f,
 		HostBackends: hosts_chans,
-		Backends: backends_chan,
+		Backends:     backends_chan,
 	}
 
 	if logger != nil {

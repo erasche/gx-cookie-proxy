@@ -1,11 +1,11 @@
 package main
 
 import (
-	"log"
-	"net/http"
-	"net"
 	"bufio"
 	"errors"
+	"log"
+	"net"
+	"net/http"
 )
 
 type RequestLogger struct {
