@@ -2,15 +2,14 @@ package main
 
 import (
 	"bufio"
+	"database/sql"
+	"github.com/patrickmn/go-cache"
+	"github.com/urfave/cli"
 	"regexp"
 	"time"
-	"database/sql"
-	        "github.com/patrickmn/go-cache"
 
 	"encoding/hex"
-	"flag"
 	"fmt"
-	goconf "github.com/akrennmair/goconf"
 	_ "github.com/lib/pq"
 	"golang.org/x/crypto/blowfish"
 	"io"
@@ -21,16 +20,20 @@ import (
 	"strings"
 )
 
+var (
+	version   string
+	builddate string
+)
+
 type Backend struct {
 	Name          string
 	ConnectString string
 	GalaxyDB      *sql.DB
 	GalaxyCipher  *blowfish.Cipher
-	Cache *cache.Cache
+	Cache         *cache.Cache
 }
 
 var hexReg, _ = regexp.Compile("[^a-fA-F0-9]+")
-
 
 type Frontend struct {
 	Name         string
@@ -39,9 +42,8 @@ type Frontend struct {
 	AddForwarded bool
 	Hosts        []string
 	Backends     []string
-	//AddHeader    struct { Key string; Value string }
-	KeyFile  string
-	CertFile string
+	KeyFile      string
+	CertFile     string
 }
 
 func Copy(dest *bufio.ReadWriter, src *bufio.ReadWriter) {
@@ -147,7 +149,6 @@ func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.ToLower(conn_hdr) == "upgrade" {
 		//log.Printf("got Connection: Upgrade")
 
-
 		upgrade_hdrs := r.Header["Upgrade"]
 		//log.Printf("Upgrade headers: %v", upgrade_hdrs)
 		if len(upgrade_hdrs) > 0 {
@@ -203,12 +204,7 @@ func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func usage() {
-	fmt.Fprintf(os.Stdout, "usage: %s -config=<configfile>\n", os.Args[0])
-	os.Exit(1)
-}
-
-func lookupEmailByCookie(b *Backend, cookie string) (string, bool){
+func lookupEmailByCookie(b *Backend, cookie string) (string, bool) {
 
 	cachedEmail, found := b.Cache.Get(cookie[14:])
 	if found {
@@ -217,21 +213,21 @@ func lookupEmailByCookie(b *Backend, cookie string) (string, bool){
 
 	data, err := hex.DecodeString(cookie[14:])
 	pt := make([]byte, 40)
-	for i := 0; i < len(data); i+= blowfish.BlockSize {
+	for i := 0; i < len(data); i += blowfish.BlockSize {
 		j := i + blowfish.BlockSize
 		b.GalaxyCipher.Decrypt(pt[i:j], data[i:j])
 	}
 	session_key := strings.Replace(string(pt), "!", "", -1)
 	safe_session_key := hexReg.ReplaceAllString(session_key, "")
 	//err := db.QueryRow(`INSERT INTO users(name, favorite_fruit, age)
-		//VALUES('beatrice', 'starfruit', 93) RETURNING id`).Scan(&userid)
+	//VALUES('beatrice', 'starfruit', 93) RETURNING id`).Scan(&userid)
 
 	var email string
 	err = b.GalaxyDB.QueryRow(`
 SELECT galaxy_user.email
 FROM galaxy_session, galaxy_user
 WHERE galaxy_user.id = galaxy_session.user_id and galaxy_session.session_key=$1`,
-	safe_session_key,
+		safe_session_key,
 	).Scan(&email)
 
 	if err != nil {
@@ -243,194 +239,87 @@ WHERE galaxy_user.id = galaxy_session.user_id and galaxy_session.session_key=$1`
 }
 
 func main() {
-	var cfgfile *string = flag.String("config", "", "configuration file")
-	backends := make(map[string]*Backend)
-	hosts := make(map[string][]*Backend)
-	frontends := make(map[string]*Frontend)
+	app := cli.NewApp()
+	app.Name = "gx-cookie-proxy"
+	app.Usage = "Proxy requests, transparently determining galaxy user based on gxsession cookie and adding a REMOTE_USER header"
+	app.Version = fmt.Sprintf("%s (%s)", version, builddate)
 
-	flag.Parse()
-
-	if *cfgfile == "" {
-		usage()
+	app.Flags = []cli.Flag{
+		cli.StringFlag{
+			Name:   "galaxyDb",
+			Value:  "postgresql://galaxy:galaxy@localhost:32777/galaxy?client_encoding=utf8&sslmode=disable",
+			Usage:  "Galaxy Database Address",
+			EnvVar: "GALAXY_DB_URL",
+		},
+		cli.StringFlag{
+			Name:   "galaxySecret",
+			Value:  "USING THE DEFAULT IS NOT SECURE!",
+			Usage:  "Galaxy Secret",
+			EnvVar: "GALAXY_SECRET",
+		},
+		cli.StringFlag{
+			Name:   "listenAddr",
+			Value:  "0.0.0.0:5000",
+			Usage:  "Address to listen on",
+			EnvVar: "GP_LISTEN_ADDR",
+		},
+		cli.StringFlag{
+			Name:   "connect",
+			Value:  "http://localhost:5000/apollo",
+			Usage:  "Backend URL.",
+			EnvVar: "GP_BACKEND_URL",
+		},
 	}
 
-	cfg, err := goconf.ReadConfigFile(*cfgfile)
+	app.Action = func(c *cli.Context) {
+		main2(
+			c.String("galaxyDb"),
+			c.String("galaxySecret"),
+			c.String("listenAddr"),
+			c.String("connect"),
+		)
+	}
+
+	err := app.Run(os.Args)
 	if err != nil {
-		log.Printf("opening %s failed: %v", *cfgfile, err)
-		os.Exit(1)
+		panic(err)
+	}
+}
+
+func main2(galaxyDb, galaxySecret, listenAddr, connect string) {
+	db, err := sql.Open("postgres", galaxyDb)
+	if err != nil {
+		log.Fatal("Could not connect: %s", err)
 	}
 
-	var access_f io.WriteCloser
-	accesslog_file, err := cfg.GetString("global", "accesslog")
-	if err == nil {
-		access_f, err = os.OpenFile(accesslog_file, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0600)
-		if err == nil {
-			defer access_f.Close()
-		} else {
-			log.Printf("Opening access log %s failed: %v", accesslog_file, err)
-		}
+	bf, err := blowfish.NewCipher([]byte(galaxySecret))
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	// first, extract backends
-	for _, section := range cfg.GetSections() {
-		if strings.HasPrefix(section, "backend ") {
-			tokens := strings.Split(section, " ")
-			if len(tokens) < 2 {
-				log.Printf("backend section has no name, ignoring.")
-				continue
-			}
-			gx_connect_str, _ := cfg.GetString(section, "galaxy_dburl")
-			var db *sql.DB
-			if gx_connect_str == "" {
-				log.Printf("empty galaxy_dburl string for backend %s, ignoring.", tokens[1])
-				continue
-			} else {
-				db, err = sql.Open("postgres", gx_connect_str)
-			}
-
-			gx_secret, _ := cfg.GetString(section, "galaxy_secret")
-			var bf *blowfish.Cipher
-			if gx_secret == "" {
-				log.Printf("empty galaxy_secret string for backend %s, ignoring.", tokens[1])
-				continue
-			} else {
-				bf, err = blowfish.NewCipher([]byte(gx_secret))
-				if err != nil {
-					log.Fatal(err)
-				}
-			}
-
-			connect_str, _ := cfg.GetString(section, "connect")
-			if connect_str == "" {
-				log.Printf("empty connect string for backend %s, ignoring.", tokens[1])
-				continue
-			}
-			b := &Backend{
-				Name:          tokens[1],
-				ConnectString: connect_str,
-				GalaxyDB:      db,
-				GalaxyCipher:  bf,
-				Cache:         cache.New(1*time.Hour, 5*time.Minute),
-			}
-			backends[b.Name] = b
-		}
-	}
-
-	// then extract hosts
-	for _, section := range cfg.GetSections() {
-		if strings.HasPrefix(section, "host ") {
-			tokens := strings.Split(section, " ")
-			if len(tokens) < 2 {
-				log.Printf("host section has no name, ignoring.")
-				continue
-			}
-			backends_str, _ := cfg.GetString(section, "backends")
-			backends_list := strings.Split(backends_str, " ")
-			if len(backends_list) == 0 {
-				log.Printf("host %s has no backends, ignoring.", tokens[1])
-				continue
-			}
-			for _, host := range tokens[1:] {
-				backends_for_host := []*Backend{}
-				for _, backend := range backends_list {
-					b := backends[backend]
-					if b == nil {
-						log.Printf("backend %s doesn't exist, ignoring.", backend)
-					}
-					backends_for_host = append(backends_for_host, b)
-				}
-				hosts[host] = backends_for_host
-			}
-		}
+	backend := &Backend{
+		Name:          "default_b",
+		ConnectString: connect,
+		GalaxyDB:      db,
+		GalaxyCipher:  bf,
+		Cache:         cache.New(1*time.Hour, 5*time.Minute),
 	}
 
 	// and finally, extract frontends
-	for _, section := range cfg.GetSections() {
-		if strings.HasPrefix(section, "frontend ") {
-			tokens := strings.Split(section, " ")
-			if len(tokens) < 2 {
-				log.Printf("frontend section has no name, ignoring.")
-				continue
-			}
-
-			frontend_name := tokens[1]
-
-			frontend := &Frontend{}
-			frontend.Name = frontend_name
-			frontend.BindString, err = cfg.GetString(section, "bind")
-			if err != nil {
-				log.Printf("error while getting [%s]bind: %v, ignoring.", section, err)
-				continue
-			}
-			if frontend.BindString == "" {
-				log.Printf("frontend %s has no bind argument, ignoring.", frontend_name)
-				continue
-			}
-
-			frontend.HTTPS, err = cfg.GetBool(section, "https")
-			if err != nil {
-				frontend.HTTPS = false
-			}
-
-			if frontend.HTTPS {
-				frontend.KeyFile, err = cfg.GetString(section, "keyfile")
-				if err != nil {
-					log.Printf("error while getting[%s]keyfile: %v, ignoring.", section, err)
-					continue
-				}
-				if frontend.KeyFile == "" {
-					log.Printf("frontend %s has HTTPS enabled but no keyfile, ignoring.", frontend_name)
-					continue
-				}
-
-				frontend.CertFile, err = cfg.GetString(section, "certfile")
-				if err != nil {
-					log.Printf("error while getting[%s]certfile: %v, ignoring.", section, err)
-					continue
-				}
-				if frontend.CertFile == "" {
-					log.Printf("frontend %s has HTTPS enabled but no certfile, ignoring.", frontend_name)
-					continue
-				}
-			}
-
-			frontend_hosts, err := cfg.GetString(section, "hosts")
-			if err == nil && frontend_hosts != "" {
-				frontend.Hosts = strings.Split(frontend_hosts, " ")
-			}
-
-			frontend_backends, err := cfg.GetString(section, "backends")
-			if err == nil && frontend_backends != "" {
-				frontend.Backends = strings.Split(frontend_backends, " ")
-			}
-
-			frontend.AddForwarded, _ = cfg.GetBool(section, "add-x-forwarded-for")
-
-			if len(frontend.Backends) == 0 && len(frontend.Hosts) == 0 {
-				log.Printf("frontend %s has neither backends nor hosts configured, ignoring.", frontend_name)
-				continue
-			}
-
-			frontends[frontend_name] = frontend
-		}
+	frontend := &Frontend{
+		Name:         "default_f",
+		BindString:   listenAddr,
+		Backends:     []string{"default_b"},
+		AddForwarded: true,
 	}
 
 	count := 0
 	exit_chan := make(chan int)
-	for name, frontend := range frontends {
-		log.Printf("Starting frontend %s...", name)
-		go func(fe *Frontend, name string) {
-			var accesslogger *log.Logger
-			if access_f != nil {
-				accesslogger = log.New(access_f, "frontend:"+name+" ", log.Ldate|log.Ltime|log.Lmicroseconds)
-			} else {
-				log.Printf("Not creating logger for frontend %s", name)
-			}
-			fe.Start(hosts, backends, accesslogger)
-			exit_chan <- 1
-		}(frontend, name)
-		count++
-	}
+	go func(fe *Frontend) {
+		var accesslogger *log.Logger
+		fe.Start(backend, accesslogger)
+		exit_chan <- 1
+	}(frontend)
 
 	// this shouldn't return
 	for i := 0; i < count; i++ {
@@ -438,26 +327,23 @@ func main() {
 	}
 }
 
-func (f *Frontend) Start(hosts map[string][]*Backend, backends map[string]*Backend, logger *log.Logger) {
+func (f *Frontend) Start(backend *Backend, logger *log.Logger) {
 	mux := http.NewServeMux()
 
 	hosts_chans := make(map[string]chan *Backend)
 
-	for _, h := range f.Hosts {
-		host_chan := make(chan *Backend, len(hosts[h]))
-		for _, b := range hosts[h] {
-			host_chan <- b
-		}
-		hosts_chans[h] = host_chan
+	backends_chan := make(chan *Backend, 1)
+	backends_chan <- backend
+
+	var request_handler http.Handler = &RequestHandler{
+		Transport: &http.Transport{
+			DisableKeepAlives: false,
+			DisableCompression: false,
+		},
+		Frontend: f,
+		HostBackends: hosts_chans,
+		Backends: backends_chan,
 	}
-
-	backends_chan := make(chan *Backend, len(f.Backends))
-
-	for _, b := range f.Backends {
-		backends_chan <- backends[b]
-	}
-
-	var request_handler http.Handler = &RequestHandler{Transport: &http.Transport{DisableKeepAlives: false, DisableCompression: false}, Frontend: f, HostBackends: hosts_chans, Backends: backends_chan}
 
 	if logger != nil {
 		request_handler = NewRequestLogger(request_handler, *logger)
@@ -467,13 +353,7 @@ func (f *Frontend) Start(hosts map[string][]*Backend, backends map[string]*Backe
 
 	srv := &http.Server{Handler: mux, Addr: f.BindString}
 
-	if f.HTTPS {
-		if err := srv.ListenAndServeTLS(f.CertFile, f.KeyFile); err != nil {
-			log.Printf("Starting HTTPS frontend %s failed: %v", f.Name, err)
-		}
-	} else {
-		if err := srv.ListenAndServe(); err != nil {
-			log.Printf("Starting frontend %s failed: %v", f.Name, err)
-		}
+	if err := srv.ListenAndServe(); err != nil {
+		log.Printf("Starting frontend %s failed: %v", f.Name, err)
 	}
 }

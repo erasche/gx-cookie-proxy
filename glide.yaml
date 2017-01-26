@@ -6,3 +6,4 @@ import:
 - package: golang.org/x/crypto
   subpackages:
   - blowfish
+- package: github.com/urfave/cli

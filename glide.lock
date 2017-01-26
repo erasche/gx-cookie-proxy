@@ -1,5 +1,5 @@
-hash: f0cf953f04e351d76016d0d969cea7849d262454404c25646d394d7c92a30f40
-updated: 2016-05-19T19:54:21.711108768Z
+hash: fd5b67154be5a757e87410be4ec33517fd11e9a1fcb20ff1dca26ffefcc417df
+updated: 2017-01-25T23:32:07.088744959Z
 imports:
 - name: github.com/akrennmair/goconf
   version: c6367f3454b878fac129755a155b43a35fa992a6
@@ -9,6 +9,8 @@ imports:
   - oid
 - name: github.com/patrickmn/go-cache
   version: 1881a9bccb818787f68c52bfba648c6cf34c34fa
+- name: github.com/urfave/cli
+  version: f1be59ff3d239f0942b201619030d302bce912cc
 - name: golang.org/x/crypto
   version: 5bcd134fee4dd1475da17714aac19c0aa0142e2f
   subpackages:
