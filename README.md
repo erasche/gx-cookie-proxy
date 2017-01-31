@@ -2,7 +2,12 @@
 
 ![](./img/logo.png)
 
-gx-cookie-proxy is a WebSocket-aware SSL-capable HTTP reverse proxy based on
+gx-cookie-proxy (sometimes gxc-proxy) translate a galaxy session cookie into a
+`REMOTE_USER` identity. This allows you to use Galaxy as your primary source of
+authentication data, and provide access control to other services based on
+Galaxy.
+
+The code is a WebSocket-aware SSL-capable HTTP reverse proxy based on
 [drunken-hipster](https://github.com/joinmytalk/drunken-hipster)
 
 ## Deployment
