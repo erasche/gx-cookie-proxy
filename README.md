@@ -1,5 +1,7 @@
 # gx-cookie-proxy
 
+![](./img/logo.png)
+
 gx-cookie-proxy is a WebSocket-aware SSL-capable HTTP reverse proxy based on
 [drunken-hipster](https://github.com/joinmytalk/drunken-hipster)
 
