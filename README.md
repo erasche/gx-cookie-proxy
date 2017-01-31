@@ -1,4 +1,4 @@
-# gx-cookie-proxy
+# gx-cookie-proxy [![Docker Repository on Quay](https://quay.io/repository/erasche/gx-cookie-proxy/status "Docker Repository on Quay")](https://quay.io/repository/erasche/gx-cookie-proxy)
 
 ![](./img/logo.png)
 
