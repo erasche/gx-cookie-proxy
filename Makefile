@@ -35,7 +35,7 @@ release:
 	mkdir dist
 	go get github.com/mitchellh/gox
 	go get github.com/tcnksm/ghr
-	gox -ldflags "-X main.version=$(VERSION) -X main.builddate=`date -u +%Y-%m-%dT%H:%M:%SZ`" -output "dist/gx-cookie-proxy_{{.OS}}_{{.Arch}}" -os="linux"
+	CGO_ENABLED=0 gox -ldflags "-X main.version=$(VERSION) -X main.builddate=`date -u +%Y-%m-%dT%H:%M:%SZ`" -output "dist/gx-cookie-proxy_{{.OS}}_{{.Arch}}" -os="linux"
 	ghr -u erasche -replace $(VERSION) dist/
 
 .PHONY: clean lint gofmt vet complexity qc qc_deps test clean release
