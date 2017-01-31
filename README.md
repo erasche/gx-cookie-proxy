@@ -71,6 +71,18 @@ Parameter        | Env Var           | Usage
 `--listenAddr`   | `GXC_LISTEN_ADDR` | Proxy listening address
 `--connect`      | `GXC_BACKEND_URL` | Backend host + port to connect to
 
+# Changelog
+
+- 0.9.3
+	- Added dockerfile image
+- 0.9.1, 0.9.2
+	- Minor refactoring, various small things like logos, readme
+- 0.9.0
+	- Major refactoring, removed any non-necessary code paths
+	- Added CLI interface
+- 0.3.0
+	- Basic initial functionality, retained all of the original drunken-hipster code
+
 # License
 
 MIT
