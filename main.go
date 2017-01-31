@@ -261,13 +261,13 @@ func main() {
 			Name:   "listenAddr",
 			Value:  "0.0.0.0:5000",
 			Usage:  "Address to listen on",
-			EnvVar: "GP_LISTEN_ADDR",
+			EnvVar: "GXC_LISTEN_ADDR",
 		},
 		cli.StringFlag{
 			Name:   "connect",
-			Value:  "http://localhost:5000/apollo",
+			Value:  "localhost:8000",
 			Usage:  "Backend URL.",
-			EnvVar: "GP_BACKEND_URL",
+			EnvVar: "GXC_BACKEND_URL",
 		},
 	}
 

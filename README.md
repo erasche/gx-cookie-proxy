@@ -51,6 +51,19 @@ proxy requests to the backend. The backend service should either listen on
 `/galaxy/gxc_proxy/.*`, or should use completely relative paths rather than
 absolute.
 
+Note that my proxy shares a leading path component with my galaxy
+server. This is required in order to access the galaxy session cookie
+due to cookie restrictions.
+
+The gx-cookie-proxy is also configurable via environment variables:
+
+Parameter        | Env Var           | Usage
+---------------- | ----------------- | -----------
+`--galaxyDb`     | `GALAXY_DB_URL`   | Galaxy Database Address
+`--galaxySecret` | `GALAXY_SECRET`   | Galaxy cookie secret
+`--listenAddr`   | `GXC_LISTEN_ADDR` | Proxy listening address
+`--connect`      | `GXC_BACKEND_URL` | Backend host + port to connect to
+
 # License
 
 MIT
