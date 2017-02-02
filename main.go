@@ -23,6 +23,7 @@ import (
 var (
 	version   string
 	builddate string
+	logger    *log.Logger
 )
 
 type Backend struct {
@@ -238,6 +239,75 @@ WHERE galaxy_user.id = galaxy_session.user_id and galaxy_session.session_key=$1`
 	return email, false
 }
 
+func main2(galaxyDb, galaxySecret, listenAddr, connect string) {
+	db, err := sql.Open("postgres", galaxyDb)
+	if err != nil {
+		log.Fatal("Could not connect: %s", err)
+	}
+
+	bf, err := blowfish.NewCipher([]byte(galaxySecret))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	backend := &Backend{
+		Name:          "default_b",
+		ConnectString: connect,
+		GalaxyDB:      db,
+		GalaxyCipher:  bf,
+		Cache:         cache.New(1*time.Hour, 5*time.Minute),
+	}
+
+	// and finally, extract frontends
+	frontend := &Frontend{
+		Name:         "default_f",
+		BindString:   listenAddr,
+		Backends:     []string{"default_b"},
+		AddForwarded: true,
+	}
+
+	exit_chan := make(chan int)
+	go func(fe *Frontend) {
+		fe.Start(backend)
+		exit_chan <- 1
+	}(frontend)
+
+	// this shouldn't return
+	<-exit_chan
+}
+
+func (f *Frontend) Start(backend *Backend) {
+	mux := http.NewServeMux()
+
+	hosts_chans := make(map[string]chan *Backend)
+
+	backends_chan := make(chan *Backend, 1)
+	backends_chan <- backend
+
+	var request_handler http.Handler = &RequestHandler{
+		Transport: &http.Transport{
+			DisableKeepAlives:  false,
+			DisableCompression: false,
+		},
+		Frontend:     f,
+		HostBackends: hosts_chans,
+		Backends:     backends_chan,
+	}
+
+	if logger != nil {
+		request_handler = NewRequestLogger(request_handler, *logger)
+	}
+
+	mux.Handle("/", request_handler)
+
+	srv := &http.Server{Handler: mux, Addr: f.BindString}
+
+	log.Printf("Listening on %s", f.BindString)
+	if err := srv.ListenAndServe(); err != nil {
+		log.Printf("Starting frontend %s failed: %v", f.Name, err)
+	}
+}
+
 func main() {
 	app := cli.NewApp()
 	app.Name = "gx-cookie-proxy"
@@ -283,74 +353,5 @@ func main() {
 	err := app.Run(os.Args)
 	if err != nil {
 		panic(err)
-	}
-}
-
-func main2(galaxyDb, galaxySecret, listenAddr, connect string) {
-	db, err := sql.Open("postgres", galaxyDb)
-	if err != nil {
-		log.Fatal("Could not connect: %s", err)
-	}
-
-	bf, err := blowfish.NewCipher([]byte(galaxySecret))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	backend := &Backend{
-		Name:          "default_b",
-		ConnectString: connect,
-		GalaxyDB:      db,
-		GalaxyCipher:  bf,
-		Cache:         cache.New(1*time.Hour, 5*time.Minute),
-	}
-
-	// and finally, extract frontends
-	frontend := &Frontend{
-		Name:         "default_f",
-		BindString:   listenAddr,
-		Backends:     []string{"default_b"},
-		AddForwarded: true,
-	}
-
-	exit_chan := make(chan int)
-	go func(fe *Frontend) {
-		var accesslogger *log.Logger
-		fe.Start(backend, accesslogger)
-		exit_chan <- 1
-	}(frontend)
-
-	// this shouldn't return
-	<-exit_chan
-}
-
-func (f *Frontend) Start(backend *Backend, logger *log.Logger) {
-	mux := http.NewServeMux()
-
-	hosts_chans := make(map[string]chan *Backend)
-
-	backends_chan := make(chan *Backend, 1)
-	backends_chan <- backend
-
-	var request_handler http.Handler = &RequestHandler{
-		Transport: &http.Transport{
-			DisableKeepAlives:  false,
-			DisableCompression: false,
-		},
-		Frontend:     f,
-		HostBackends: hosts_chans,
-		Backends:     backends_chan,
-	}
-
-	if logger != nil {
-		request_handler = NewRequestLogger(request_handler, *logger)
-	}
-
-	mux.Handle("/", request_handler)
-
-	srv := &http.Server{Handler: mux, Addr: f.BindString}
-
-	if err := srv.ListenAndServe(); err != nil {
-		log.Printf("Starting frontend %s failed: %v", f.Name, err)
 	}
 }
