@@ -21,6 +21,20 @@ import (
 )
 
 var (
+	// Require a valid cookie.
+	STRICT_QUERY_STRING = `
+SELECT galaxy_user.email
+FROM galaxy_session, galaxy_user
+WHERE galaxy_user.id = galaxy_session.user_id and galaxy_session.session_key=$1
+AND is_valid = true`
+	// Accept an outdated / superceded one.
+	LOOSE_QUERY_STRING = `
+SELECT galaxy_user.email
+FROM galaxy_session, galaxy_user
+WHERE galaxy_user.id = galaxy_session.user_id and galaxy_session.session_key=$1`
+)
+
+var (
 	version   string
 	builddate string
 	logger    *log.Logger
@@ -32,6 +46,7 @@ type Backend struct {
 	GalaxyDB      *sql.DB
 	GalaxyCipher  *blowfish.Cipher
 	Cache         *cache.Cache
+	QueryString   string
 }
 
 var hexReg, _ = regexp.Compile("[^a-fA-F0-9]+")
@@ -237,16 +252,10 @@ func lookupEmailByCookie(b *Backend, cookie string) (string, bool) {
 	log.WithFields(log.Fields{
 		"sk": safe_session_key,
 	}).Debug("Session Key Decoded")
-	//err := db.QueryRow(`INSERT INTO users(name, favorite_fruit, age)
-	//VALUES('beatrice', 'starfruit', 93) RETURNING id`).Scan(&userid)
 
 	var email string
-	err = b.GalaxyDB.QueryRow(`
-SELECT galaxy_user.email
-FROM galaxy_session, galaxy_user
-WHERE galaxy_user.id = galaxy_session.user_id and galaxy_session.session_key=$1`,
-		safe_session_key,
-	).Scan(&email)
+
+	err = b.GalaxyDB.QueryRow(b.QueryString, safe_session_key).Scan(&email)
 
 	if err != nil {
 		if fmt.Sprintf("%s", err) == "sql: no rows in result set" {
@@ -264,7 +273,7 @@ WHERE galaxy_user.id = galaxy_session.user_id and galaxy_session.session_key=$1`
 	return email, false
 }
 
-func main2(galaxyDb, galaxySecret, listenAddr, connect string) {
+func main2(galaxyDb, galaxySecret, listenAddr, connect string, looseCookie bool) {
 	db, err := sql.Open("postgres", galaxyDb)
 	if err != nil {
 		log.Fatal("Could not connect: %s", err)
@@ -281,6 +290,14 @@ func main2(galaxyDb, galaxySecret, listenAddr, connect string) {
 		GalaxyDB:      db,
 		GalaxyCipher:  bf,
 		Cache:         cache.New(1*time.Hour, 5*time.Minute),
+	}
+
+	if looseCookie {
+		// If we are being loose in our session cookie acceptance
+		backend.QueryString = LOOSE_QUERY_STRING
+	} else {
+		// Otherwise, be strict by default.
+		backend.QueryString = STRICT_QUERY_STRING
 	}
 
 	// and finally, extract frontends
@@ -370,6 +387,11 @@ func main() {
 			Usage:  "Log level, choose from (DEBUG, INFO, WARN, ERROR)",
 			EnvVar: "GXC_LOGLEVEL",
 		},
+		cli.BoolFlag{
+			Name:   "looseCookie",
+			Usage:  "Require that a cookie is present but do not require that is_valid=True. This will allow people with expired Galaxy session cookies to access apollo. Probably provides better UX? Not sure of security implications.",
+			EnvVar: "GXC_LOOSE_COOKIE",
+		},
 	}
 
 	app.Action = func(c *cli.Context) {
@@ -394,6 +416,7 @@ func main() {
 			c.String("galaxySecret"),
 			c.String("listenAddr"),
 			c.String("connect"),
+			c.Bool("looseCookie"),
 		)
 	}
 
