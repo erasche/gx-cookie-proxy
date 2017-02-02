@@ -154,6 +154,8 @@ func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		log.Error(err)
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, "Error: missing galaxy session cookie")
 	}
 
 	upgrade_websocket := false
