@@ -73,6 +73,8 @@ Parameter        | Env Var           | Usage
 
 # Changelog
 
+- 0.9.4
+	- Add logging on bootup
 - 0.9.3
 	- Added dockerfile image
 - 0.9.1, 0.9.2
