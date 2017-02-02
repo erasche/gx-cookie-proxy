@@ -3,7 +3,7 @@ package main
 import (
 	"bufio"
 	"errors"
-	"log"
+	log "github.com/Sirupsen/logrus"
 	"net"
 	"net/http"
 )

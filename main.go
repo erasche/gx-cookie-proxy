@@ -10,10 +10,10 @@ import (
 
 	"encoding/hex"
 	"fmt"
+	log "github.com/Sirupsen/logrus"
 	_ "github.com/lib/pq"
 	"golang.org/x/crypto/blowfish"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -131,24 +131,34 @@ func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	conn_hdr := ""
 	conn_hdrs := r.Header["Connection"]
 
-	//log.Printf("Connection headers: %v", conn_hdrs)
 	if len(conn_hdrs) > 0 {
+		log.WithFields(log.Fields{
+			"headers": conn_hdrs,
+		}).Debug("Connection headers")
 		conn_hdr = conn_hdrs[0]
 	}
 
-	gx_cookie, err := r.Cookie("galaxysession")
 	var email = ""
+	gx_cookie, err := r.Cookie("galaxysession")
 	if err == nil {
 		email, _ = lookupEmailByCookie(backend, gx_cookie.String())
 		if email != "" {
 			r.Header["REMOTE_USER"] = []string{email}
-			log.Printf("Authenticated request for %s", email)
+
+			log.WithFields(log.Fields{
+				"user": email,
+				"path": r.URL.Path,
+			}).Info("Authenticated request")
+		} else {
+			log.Info("Unauthenticated request")
 		}
+	} else {
+		log.Error(err)
 	}
 
 	upgrade_websocket := false
 	if strings.ToLower(conn_hdr) == "upgrade" {
-		log.Printf("got Connection: Upgrade")
+		log.Debug("got Connection: Upgrade")
 
 		upgrade_hdrs := r.Header["Upgrade"]
 		//log.Printf("Upgrade headers: %v", upgrade_hdrs)
@@ -206,8 +216,10 @@ func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func lookupEmailByCookie(b *Backend, cookie string) (string, bool) {
-
 	cachedEmail, found := b.Cache.Get(cookie[14:])
+	log.WithFields(log.Fields{
+		"hit": found,
+	}).Debug("Cache hit")
 	if found {
 		return cachedEmail.(string), found
 	}
@@ -220,6 +232,9 @@ func lookupEmailByCookie(b *Backend, cookie string) (string, bool) {
 	}
 	session_key := strings.Replace(string(pt), "!", "", -1)
 	safe_session_key := hexReg.ReplaceAllString(session_key, "")
+	log.WithFields(log.Fields{
+		"sk": safe_session_key,
+	}).Debug("Session Key Decoded")
 	//err := db.QueryRow(`INSERT INTO users(name, favorite_fruit, age)
 	//VALUES('beatrice', 'starfruit', 93) RETURNING id`).Scan(&userid)
 
@@ -232,8 +247,16 @@ WHERE galaxy_user.id = galaxy_session.user_id and galaxy_session.session_key=$1`
 	).Scan(&email)
 
 	if err != nil {
+		if fmt.Sprintf("%s", err) == "sql: no rows in result set" {
+			log.Info("Invalid session key / cookie")
+		} else {
+			log.Error(err)
+		}
 		return "", false
 	}
+	log.WithFields(log.Fields{
+		"email": email,
+	}).Debug("Invalid session key / cookie")
 
 	b.Cache.Set(cookie[14:], email, cache.DefaultExpiration)
 	return email, false
@@ -339,9 +362,31 @@ func main() {
 			Usage:  "Backend URL.",
 			EnvVar: "GXC_BACKEND_URL",
 		},
+		cli.StringFlag{
+			Name:   "logLevel",
+			Value:  "INFO",
+			Usage:  "Log level, choose from (DEBUG, INFO, WARN, ERROR)",
+			EnvVar: "GXC_LOGLEVEL",
+		},
 	}
 
 	app.Action = func(c *cli.Context) {
+
+		// Output to stdout instead of the default stderr, could also be a file.
+		log.SetOutput(os.Stdout)
+		// Only log the warning severity or above.
+		if c.String("logLevel") == "DEBUG" {
+			log.SetLevel(log.DebugLevel)
+		} else if c.String("logLevel") == "INFO" {
+			log.SetLevel(log.InfoLevel)
+		} else if c.String("logLevel") == "WARN" {
+			log.SetLevel(log.WarnLevel)
+		} else if c.String("logLevel") == "ERROR" {
+			log.SetLevel(log.ErrorLevel)
+		} else {
+			panic("Unknown log level")
+		}
+
 		main2(
 			c.String("galaxyDb"),
 			c.String("galaxySecret"),

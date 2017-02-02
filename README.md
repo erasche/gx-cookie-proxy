@@ -70,9 +70,12 @@ Parameter        | Env Var           | Usage
 `--galaxySecret` | `GALAXY_SECRET`   | Galaxy cookie secret
 `--listenAddr`   | `GXC_LISTEN_ADDR` | Proxy listening address
 `--connect`      | `GXC_BACKEND_URL` | Backend host + port to connect to
+`--logLevel`     | `GXC_LOGLEVEL`    | Logging level (DBEUG, INFO (default), WARN, ERROR)
 
 # Changelog
 
+- 0.9.5
+	- More debugging logging for production usage.
 - 0.9.4
 	- Add logging on bootup
 - 0.9.3
