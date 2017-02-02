@@ -5,8 +5,7 @@ EXPOSE 5000
 RUN apk update && \
 	apk add curl
 
-ENV GXC_VERSION v0.9.3
-RUN curl -L https://github.com/erasche/gx-cookie-proxy/releases/download/${GXC_VERSION}/gx-cookie-proxy_linux_amd64 > /usr/bin/gx-cookie-proxy && \
+RUN curl -L https://github.com/erasche/gx-cookie-proxy/releases/download/v0.9.4/gx-cookie-proxy_linux_amd64 > /usr/bin/gx-cookie-proxy && \
 	chmod +x /usr/bin/gx-cookie-proxy
 
 ENTRYPOINT ["/usr/bin/gx-cookie-proxy"]
