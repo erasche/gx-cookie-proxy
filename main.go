@@ -47,6 +47,7 @@ type Backend struct {
 	GalaxyCipher  *blowfish.Cipher
 	Cache         *cache.Cache
 	QueryString   string
+	Header        string
 }
 
 var hexReg, _ = regexp.Compile("[^a-fA-F0-9]+")
@@ -101,6 +102,7 @@ type RequestHandler struct {
 	Frontend     *Frontend
 	HostBackends map[string]chan *Backend
 	Backends     chan *Backend
+	Header       string
 }
 
 func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -158,7 +160,7 @@ func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		email, _ = lookupEmailByCookie(backend, gx_cookie.String())
 		if email != "" {
-			r.Header["REMOTE_USER"] = []string{email}
+			r.Header[h.Header] = []string{email}
 
 			log.WithFields(log.Fields{
 				"user": email,
@@ -273,7 +275,7 @@ func lookupEmailByCookie(b *Backend, cookie string) (string, bool) {
 	return email, false
 }
 
-func main2(galaxyDb, galaxySecret, listenAddr, connect string, looseCookie bool) {
+func main2(galaxyDb, galaxySecret, listenAddr, connect, header string, looseCookie bool) {
 	db, err := sql.Open("postgres", galaxyDb)
 	if err != nil {
 		log.Fatal("Could not connect: %s", err)
@@ -290,6 +292,7 @@ func main2(galaxyDb, galaxySecret, listenAddr, connect string, looseCookie bool)
 		GalaxyDB:      db,
 		GalaxyCipher:  bf,
 		Cache:         cache.New(1*time.Hour, 5*time.Minute),
+		Header:        header,
 	}
 
 	if looseCookie {
@@ -334,6 +337,7 @@ func (f *Frontend) Start(backend *Backend) {
 		Frontend:     f,
 		HostBackends: hosts_chans,
 		Backends:     backends_chan,
+		Header:       backend.Header,
 	}
 
 	if logger != nil {
@@ -392,6 +396,12 @@ func main() {
 			Usage:  "Require that a cookie is present but do not require that is_valid=True. This will allow people with expired Galaxy session cookies to access apollo. Probably provides better UX? Not sure of security implications.",
 			EnvVar: "GXC_LOOSE_COOKIE",
 		},
+		cli.StringFlag{
+			Name:   "header",
+			Value:  "REMOTE_USER",
+			Usage:  "Customize the HTTP Header (for those picky applications)",
+			EnvVar: "GXC_HEADER",
+		},
 	}
 
 	app.Action = func(c *cli.Context) {
@@ -416,6 +426,7 @@ func main() {
 			c.String("galaxySecret"),
 			c.String("listenAddr"),
 			c.String("connect"),
+			c.String("header"),
 			c.Bool("looseCookie"),
 		)
 	}

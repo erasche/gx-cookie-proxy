@@ -71,9 +71,12 @@ Parameter        | Env Var           | Usage
 `--listenAddr`   | `GXC_LISTEN_ADDR` | Proxy listening address
 `--connect`      | `GXC_BACKEND_URL` | Backend host + port to connect to
 `--logLevel`     | `GXC_LOGLEVEL`    | Logging level (DBEUG, INFO (default), WARN, ERROR)
+`--header`       | `GXC_HEADER`      | Header to send to backend service
 
 # Changelog
 
+- 0.9.6
+	- Allow customising the `REMOTE_USER` header
 - 0.9.5
 	- More debugging logging for production usage.
 - 0.9.4
@@ -96,4 +99,3 @@ MIT
 
 - Original Drunken Hipster Proxy - Andreas Krennmair <ak@synflood.at>
 - Galaxy Portions - Eric Rasche <esr@tamu.edu>
-
