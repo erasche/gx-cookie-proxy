@@ -75,6 +75,8 @@ Parameter        | Env Var           | Usage
 
 # Changelog
 
+- 0.9.7
+	- Small bugfix
 - 0.9.6
 	- Allow customising the `REMOTE_USER` header
 - 0.9.5
