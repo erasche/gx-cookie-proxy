@@ -40,7 +40,7 @@ var (
 	version   string
 	builddate string
 	logger    *log.Logger
-	Graphite  graphite
+	Graphite  *grph.Graphite
 )
 
 type Backend struct {
