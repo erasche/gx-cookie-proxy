@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"database/sql"
+	grph "github.com/marpaia/graphite-golang"
 	"github.com/patrickmn/go-cache"
 	"github.com/urfave/cli"
+
 	"regexp"
 	"time"
 
@@ -38,6 +40,7 @@ var (
 	version   string
 	builddate string
 	logger    *log.Logger
+	Graphite  graphite
 )
 
 type Backend struct {
@@ -166,8 +169,13 @@ func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"user": email,
 				"path": r.URL.Path,
 			}).Info("Authenticated request")
+			Graphite.SimpleSend("system.edu.tamu.cpt.apollo.requests.authenticated", "1")
+			// Then log their email for checking individual users / who is online.
+			// TODO: disable this by default?
+			Graphite.SimpleSend("system.edu.tamu.cpt.apollo.requests.authenticated."+strings.Replace(email, ".", "", -1), "1")
 		} else {
 			log.Info("Unauthenticated request")
+			Graphite.SimpleSend("system.edu.tamu.cpt.apollo.requests.unauthenticated", "1")
 		}
 	} else {
 		log.Error(err)
@@ -274,11 +282,21 @@ func lookupEmailByCookie(b *Backend, cookie string) (string, bool) {
 	return email, false
 }
 
-func main2(galaxyDb, galaxySecret, listenAddr, connect, header string, looseCookie bool) {
+func main2(galaxyDb, galaxySecret, listenAddr, connect, header, graphite_address string, graphite_port int, looseCookie bool) {
 	db, err := sql.Open("postgres", galaxyDb)
 	if err != nil {
 		log.Fatal("Could not connect: %s", err)
 	}
+
+	if len(graphite_address) > 0 {
+		Graphite, err = grph.NewGraphite(graphite_address, graphite_port)
+	} else {
+		Graphite = grph.NewGraphiteNop(graphite_address, graphite_port)
+	}
+	if err != nil {
+		Graphite = grph.NewGraphiteNop(graphite_address, graphite_port)
+	}
+	log.Printf("Loaded Graphite connection: %#v", Graphite)
 
 	bf, err := blowfish.NewCipher([]byte(galaxySecret))
 	if err != nil {
@@ -401,6 +419,17 @@ func main() {
 			Usage:  "Customize the HTTP Header (for those picky applications)",
 			EnvVar: "GXC_HEADER",
 		},
+		cli.StringFlag{
+			Name:   "graphite_address",
+			Value:  "",
+			Usage:  "Set this if you wish to send data to graphite somewhere",
+			EnvVar: "GXC_GRAPHITE",
+		},
+		cli.IntFlag{
+			Name:   "graphite_port",
+			Value:  2003,
+			EnvVar: "GXC_GRAPHITE_PORT",
+		},
 	}
 
 	app.Action = func(c *cli.Context) {
@@ -426,6 +455,8 @@ func main() {
 			c.String("listenAddr"),
 			c.String("connect"),
 			c.String("header"),
+			c.String("graphite_address"),
+			c.Int("graphite_port"),
 			c.Bool("looseCookie"),
 		)
 	}
