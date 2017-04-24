@@ -64,19 +64,22 @@ due to cookie restrictions.
 
 The gx-cookie-proxy is also configurable via environment variables:
 
-Parameter            | Env Var             | Usage
--------------------- | ------------------- | -----------
-`--galaxyDb`         | `GALAXY_DB_URL`     | Galaxy Database Address
-`--galaxySecret`     | `GALAXY_SECRET`     | Galaxy cookie secret
-`--listenAddr`       | `GXC_LISTEN_ADDR`   | Proxy listening address
-`--connect`          | `GXC_BACKEND_URL`   | Backend host + port to connect to
-`--logLevel`         | `GXC_LOGLEVEL`      | Logging level (DBEUG, INFO (default), WARN, ERROR)
-`--header`           | `GXC_HEADER`        | Header to send to backend service
-`--graphite_address` | `GXC_GRAPHITE`      | Graphite server
-`--graphite_port`    | `GXC_GRAPHITE_PORT` | Graphite port (2003 by default)
+Parameter            | Env Var               | Usage
+-------------------- | -------------------   | -----------
+`--galaxyDb`         | `GALAXY_DB_URL`       | Galaxy Database Address
+`--galaxySecret`     | `GALAXY_SECRET`       | Galaxy cookie secret
+`--listenAddr`       | `GXC_LISTEN_ADDR`     | Proxy listening address
+`--connect`          | `GXC_BACKEND_URL`     | Backend host + port to connect to
+`--logLevel`         | `GXC_LOGLEVEL`        | Logging level (DBEUG, INFO (default), WARN, ERROR)
+`--header`           | `GXC_HEADER`          | Header to send to backend service
+`--graphite_address` | `GXC_GRAPHITE`        | Graphite server
+`--graphite_port`    | `GXC_GRAPHITE_PORT`   | Graphite port (2003 by default)
+`--graphite_prefix`  | `GXC_GRAPHITE_PREFIX` | Graphite prefix (`gxc` by default)
 
 # Changelog
 
+- 0.9.9
+	- Graphite prefix support
 - 0.9.8
 	- Graphite Support
 - 0.9.7
