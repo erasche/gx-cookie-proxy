@@ -169,13 +169,13 @@ func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"user": email,
 				"path": r.URL.Path,
 			}).Info("Authenticated request")
-			Graphite.SimpleSend("system.edu.tamu.cpt.apollo.requests.authenticated", "1")
+			Graphite.SimpleSend("requests.authenticated", "1")
 			// Then log their email for checking individual users / who is online.
 			// TODO: disable this by default?
-			Graphite.SimpleSend("system.edu.tamu.cpt.apollo.requests.authenticated."+strings.Replace(email, ".", "", -1), "1")
+			Graphite.SimpleSend("requests.authenticated."+strings.Replace(email, ".", "", -1), "1")
 		} else {
 			log.Info("Unauthenticated request")
-			Graphite.SimpleSend("system.edu.tamu.cpt.apollo.requests.unauthenticated", "1")
+			Graphite.SimpleSend("requests.unauthenticated", "1")
 		}
 	} else {
 		log.Error(err)
@@ -282,14 +282,14 @@ func lookupEmailByCookie(b *Backend, cookie string) (string, bool) {
 	return email, false
 }
 
-func main2(galaxyDb, galaxySecret, listenAddr, connect, header, graphite_address string, graphite_port int, looseCookie bool) {
+func main2(galaxyDb, galaxySecret, listenAddr, connect, header, graphite_address, graphite_prefix string, graphite_port int, looseCookie bool) {
 	db, err := sql.Open("postgres", galaxyDb)
 	if err != nil {
 		log.Fatal("Could not connect: %s", err)
 	}
 
 	if len(graphite_address) > 0 {
-		Graphite, err = grph.NewGraphite(graphite_address, graphite_port)
+		Graphite, err = grph.NewGraphiteWithMetricPrefix(graphite_address, graphite_port, graphite_prefix)
 	} else {
 		Graphite = grph.NewGraphiteNop(graphite_address, graphite_port)
 	}
@@ -425,6 +425,12 @@ func main() {
 			Usage:  "Set this if you wish to send data to graphite somewhere",
 			EnvVar: "GXC_GRAPHITE",
 		},
+		cli.StringFlag{
+			Name:   "graphite_prefix",
+			Value:  "gxc",
+			Usage:  "Graphite statistics prefix.",
+			EnvVar: "GXC_GRAPHITE_PREFIX",
+		},
 		cli.IntFlag{
 			Name:   "graphite_port",
 			Value:  2003,
@@ -456,6 +462,7 @@ func main() {
 			c.String("connect"),
 			c.String("header"),
 			c.String("graphite_address"),
+			c.String("graphite_prefix"),
 			c.Int("graphite_port"),
 			c.Bool("looseCookie"),
 		)
