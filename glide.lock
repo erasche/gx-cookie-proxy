@@ -1,5 +1,5 @@
 hash: fd5b67154be5a757e87410be4ec33517fd11e9a1fcb20ff1dca26ffefcc417df
-updated: 2017-01-25T23:32:07.088744959Z
+updated: 2017-04-24T17:29:29.332343893Z
 imports:
 - name: github.com/akrennmair/goconf
   version: c6367f3454b878fac129755a155b43a35fa992a6
@@ -7,12 +7,20 @@ imports:
   version: ee1442bda7bd1b6a84e913bdb421cb1874ec629d
   subpackages:
   - oid
+- name: github.com/marpaia/graphite-golang
+  version: c474c9b821b4d0a4574edc6412b0003fbce233c4
 - name: github.com/patrickmn/go-cache
   version: 1881a9bccb818787f68c52bfba648c6cf34c34fa
+- name: github.com/Sirupsen/logrus
+  version: 10f801ebc38b33738c9d17d50860f484a0988ff5
 - name: github.com/urfave/cli
   version: f1be59ff3d239f0942b201619030d302bce912cc
 - name: golang.org/x/crypto
   version: 5bcd134fee4dd1475da17714aac19c0aa0142e2f
   subpackages:
   - blowfish
+- name: golang.org/x/sys
+  version: ea9bcade75cb975a0b9738936568ab388b845617
+  subpackages:
+  - unix
 devImports: []
