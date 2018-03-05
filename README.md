@@ -72,12 +72,14 @@ Parameter            | Env Var               | Usage
 `--connect`          | `GXC_BACKEND_URL`     | Backend host + port to connect to
 `--logLevel`         | `GXC_LOGLEVEL`        | Logging level (DBEUG, INFO (default), WARN, ERROR)
 `--header`           | `GXC_HEADER`          | Header to send to backend service
-`--graphite_address` | `GXC_GRAPHITE`        | Graphite server
-`--graphite_port`    | `GXC_GRAPHITE_PORT`   | Graphite port (2003 by default)
-`--graphite_prefix`  | `GXC_GRAPHITE_PREFIX` | Graphite prefix (`gxc` by default)
+`--statsd_address`   | `GXC_STATSD`          | StatsD server
+`--statsd_prefix`    | `GXC_STATSD_PREFIX`   | StatsD prefix (`gxc.` by default)
 
 # Changelog
 
+- 0.9.10
+	- replaced Graphite with StatsD (UDP by default, so tolerates network failures without requiring a restart.)
+	- Switched dependencies to dep.
 - 0.9.9
 	- Graphite prefix support
 - 0.9.8

@@ -47,9 +47,7 @@ clean:
 release:
 	rm -rf dist/
 	mkdir dist
-	go get github.com/mitchellh/gox
-	go get github.com/tcnksm/ghr
-	CGO_ENABLED=0 gox $(GO_FLAGS) -os="linux"
+	CGO_ENABLED=0 gox $(GO_FLAGS) -os="linux" -output "dist/{{.Dir}}_{{.OS}}_{{.Arch}}".
 	ghr -u erasche -replace $(VERSION) dist/
 
 .PHONY: clean lint gofmt vet complexity qc qc_deps test clean release
