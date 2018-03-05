@@ -2,47 +2,80 @@
 
 
 [[projects]]
-  name = "github.com/Sirupsen/logrus"
+  name = "github.com/BurntSushi/toml"
   packages = ["."]
-  revision = "10f801ebc38b33738c9d17d50860f484a0988ff5"
+  revision = "b26d9c308763d68093482582cea63d69be07a0f0"
+  version = "v0.3.0"
 
 [[projects]]
+  name = "github.com/Sirupsen/logrus"
+  packages = ["."]
+  revision = "d682213848ed68c0a260ca37d6dd5ace8423f5ba"
+  version = "v1.0.4"
+
+[[projects]]
+  branch = "master"
   name = "github.com/lib/pq"
   packages = [
     ".",
     "oid"
   ]
-  revision = "ee1442bda7bd1b6a84e913bdb421cb1874ec629d"
+  revision = "88edab0803230a3898347e77b474f8c1820a1f20"
 
 [[projects]]
+  branch = "master"
   name = "github.com/marpaia/graphite-golang"
   packages = ["."]
-  revision = "c474c9b821b4d0a4574edc6412b0003fbce233c4"
+  revision = "134b9af18cf31f936ebddbd11c03eead4d501601"
 
 [[projects]]
   name = "github.com/patrickmn/go-cache"
   packages = ["."]
-  revision = "1881a9bccb818787f68c52bfba648c6cf34c34fa"
-  version = "v2.0.0"
+  revision = "a3647f8e31d79543b2d0f0ae2fe5c379d72cedc0"
+  version = "v2.1.0"
 
 [[projects]]
   name = "github.com/urfave/cli"
-  packages = ["."]
-  revision = "f1be59ff3d239f0942b201619030d302bce912cc"
+  packages = [
+    ".",
+    "altsrc"
+  ]
+  revision = "cfb38830724cc34fedffe9a2a29fb54fa9169cd1"
+  version = "v1.20.0"
 
 [[projects]]
+  branch = "master"
   name = "golang.org/x/crypto"
-  packages = ["blowfish"]
-  revision = "5bcd134fee4dd1475da17714aac19c0aa0142e2f"
+  packages = [
+    "blowfish",
+    "ssh/terminal"
+  ]
+  revision = "8c653846df49742c4c85ec37e5d9f8d3ba657895"
 
 [[projects]]
+  branch = "master"
   name = "golang.org/x/sys"
-  packages = ["unix"]
-  revision = "ea9bcade75cb975a0b9738936568ab388b845617"
+  packages = [
+    "unix",
+    "windows"
+  ]
+  revision = "f6cff0780e542efa0c8e864dc8fa522808f6a598"
+
+[[projects]]
+  name = "gopkg.in/urfave/cli.v1"
+  packages = ["."]
+  revision = "cfb38830724cc34fedffe9a2a29fb54fa9169cd1"
+  version = "v1.20.0"
+
+[[projects]]
+  name = "gopkg.in/yaml.v2"
+  packages = ["."]
+  revision = "7f97868eec74b32b0982dd158a51a446d1da7eb5"
+  version = "v2.1.1"
 
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "01f3ac2a501a294a7dafe2a3fcbb8e3a33e1b0a303500386a91909a95a5e0f70"
+  inputs-digest = "a09c2239c0c89e832001d972f4e4195a6d923076cdd465406715f4bde9576259"
   solver-name = "gps-cdcl"
   solver-version = 1

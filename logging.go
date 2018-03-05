@@ -3,9 +3,10 @@ package main
 import (
 	"bufio"
 	"errors"
-	log "github.com/Sirupsen/logrus"
 	"net"
 	"net/http"
+
+	log "github.com/Sirupsen/logrus"
 )
 
 type RequestLogger struct {

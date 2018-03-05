@@ -3,23 +3,23 @@ package main
 import (
 	"bufio"
 	"database/sql"
-	grph "github.com/marpaia/graphite-golang"
-	"github.com/patrickmn/go-cache"
-	"github.com/urfave/cli"
-
-	"regexp"
-	"time"
-
 	"encoding/hex"
 	"fmt"
-	log "github.com/Sirupsen/logrus"
-	_ "github.com/lib/pq"
-	"golang.org/x/crypto/blowfish"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
+	"time"
+
+	log "github.com/Sirupsen/logrus"
+	_ "github.com/lib/pq"
+	"github.com/quipo/statsd"
+
+	"github.com/patrickmn/go-cache"
+	"github.com/urfave/cli"
+	"golang.org/x/crypto/blowfish"
 )
 
 var (
@@ -29,6 +29,7 @@ SELECT galaxy_user.email
 FROM galaxy_session, galaxy_user
 WHERE galaxy_user.id = galaxy_session.user_id and galaxy_session.session_key=$1
 AND is_valid = true`
+
 	// Accept an outdated / superceded one.
 	LOOSE_QUERY_STRING = `
 SELECT galaxy_user.email
@@ -40,7 +41,7 @@ var (
 	version   string
 	builddate string
 	logger    *log.Logger
-	Graphite  *grph.Graphite
+	Metrics    *statsd.StatsdBuffer
 )
 
 type Backend struct {
@@ -161,7 +162,7 @@ func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var email = ""
 	gx_cookie, err := r.Cookie("galaxysession")
 	if err == nil {
-		email, _ = lookupEmailByCookie(backend, gx_cookie.String())
+		email, _ = timedLookupEmailByCookie(backend, gx_cookie.String())
 		if email != "" {
 			r.Header[h.Header] = []string{email}
 
@@ -169,13 +170,17 @@ func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"user": email,
 				"path": r.URL.Path,
 			}).Info("Authenticated request")
-			Graphite.SimpleSend("requests.authenticated", "1")
-			// Then log their email for checking individual users / who is online.
-			// TODO: disable this by default?
-			Graphite.SimpleSend("requests.authenticated."+strings.Replace(email, ".", "", -1), "1")
+			if Metrics != nil{
+				Metrics.Gauge("requests.authenticated", 1)
+				// Then log their email for checking individual users / who is online.
+				// TODO: disable this by default?
+				Metrics.Gauge("requests.authenticated."+strings.Replace(email, ".", "", -1), 1)
+			}
 		} else {
 			log.Info("Unauthenticated request")
-			Graphite.SimpleSend("requests.unauthenticated", "1")
+			if Metrics != nil{
+						Metrics.Gauge("requests.unauthenticated", 1)
+			}
 		}
 	} else {
 		log.Error(err)
@@ -241,30 +246,53 @@ func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func lookupEmailByCookie(b *Backend, cookie string) (string, bool) {
-	cachedEmail, found := b.Cache.Get(cookie[14:])
-	log.WithFields(log.Fields{
-		"hit": found,
-	}).Debug("Cache hit")
-	if found {
-		return cachedEmail.(string), found
+func timedLookupEmailByCookie(b *Backend, cookie string) (string, bool){
+	start := time.Now()
+	email, found := lookupEmailByCookie(b, cookie)
+	t := time.Now()
+	elapsed := t.Sub(start)
+	Metrics.PrecisionTiming("query_timing", elapsed)
+	return email, found
+}
+
+func cookieToSessionKey(b *Backend, cookie string) (sessionKey string) {
+	data, err := hex.DecodeString(cookie[14:])
+	// If we can decode, exit early.
+	if err != nil {
+		return "will-never-match"
 	}
 
-	data, err := hex.DecodeString(cookie[14:])
+	// Decrypt the session key
 	pt := make([]byte, 40)
 	for i := 0; i < len(data); i += blowfish.BlockSize {
 		j := i + blowfish.BlockSize
 		b.GalaxyCipher.Decrypt(pt[i:j], data[i:j])
 	}
+
+	// And strip all the exclamations from it.
 	session_key := strings.Replace(string(pt), "!", "", -1)
 	safe_session_key := hexReg.ReplaceAllString(session_key, "")
+
+	// Debugging
 	log.WithFields(log.Fields{
 		"sk": safe_session_key,
 	}).Debug("Session Key Decoded")
+	return safe_session_key
+}
 
-	var email string
+func lookupEmailByCookie(b *Backend, cookie string) (email string, found bool) {
+	cachedEmail, found := b.Cache.Get(cookie[14:])
+	log.WithFields(log.Fields{
+		"hit": found,
+	}).Debug("Cache hit")
+	if found {
+		Metrics.Incr("cache.hit", 1)
+		return cachedEmail.(string), found
+	}
+	Metrics.Incr("cache.miss", 1)
 
-	err = b.GalaxyDB.QueryRow(b.QueryString, safe_session_key).Scan(&email)
+	safe_session_key := cookieToSessionKey(b, cookie)
+	err := b.GalaxyDB.QueryRow(b.QueryString, safe_session_key).Scan(&email)
 
 	if err != nil {
 		if fmt.Sprintf("%s", err) == "sql: no rows in result set" {
@@ -282,21 +310,26 @@ func lookupEmailByCookie(b *Backend, cookie string) (string, bool) {
 	return email, false
 }
 
-func main2(galaxyDb, galaxySecret, listenAddr, connect, header, graphite_address, graphite_prefix string, graphite_port int, looseCookie bool) {
+func main2(galaxyDb, galaxySecret, listenAddr, connect, header, statsd_address, statsd_prefix string, looseCookie bool) {
 	db, err := sql.Open("postgres", galaxyDb)
 	if err != nil {
 		log.Fatal("Could not connect: %s", err)
 	}
 
-	if len(graphite_address) > 0 {
-		Graphite, err = grph.NewGraphiteWithMetricPrefix(graphite_address, graphite_port, graphite_prefix)
-	} else {
-		Graphite = grph.NewGraphiteNop(graphite_address, graphite_port)
+	var statsdclient *statsd.StatsdClient
+	if len(statsd_address) > 0 {
+		statsdclient = statsd.NewStatsdClient(statsd_address, statsd_prefix)
+		err := statsdclient.CreateSocket()
+		if err != nil {
+			log.Fatal("Could not configure StatsD connection")
+		}
+		interval := time.Second * 2 // aggregate stats and flush every 2 seconds
+		Metrics := statsd.NewStatsdBuffer(interval, statsdclient)
+		defer Metrics.Close()
+		log.Printf("Loaded StatsD connection: %#v", Metrics)
 	}
-	if err != nil {
-		Graphite = grph.NewGraphiteNop(graphite_address, graphite_port)
-	}
-	log.Printf("Loaded Graphite connection: %#v", Graphite)
+
+
 
 	bf, err := blowfish.NewCipher([]byte(galaxySecret))
 	if err != nil {
@@ -420,21 +453,16 @@ func main() {
 			EnvVar: "GXC_HEADER",
 		},
 		cli.StringFlag{
-			Name:   "graphite_address",
+			Name:   "statsd_address",
 			Value:  "",
-			Usage:  "Set this if you wish to send data to graphite somewhere",
-			EnvVar: "GXC_GRAPHITE",
+			Usage:  "Set this if you wish to send data to statsd somewhere",
+			EnvVar: "GXC_STATSD",
 		},
 		cli.StringFlag{
-			Name:   "graphite_prefix",
-			Value:  "gxc",
-			Usage:  "Graphite statistics prefix.",
-			EnvVar: "GXC_GRAPHITE_PREFIX",
-		},
-		cli.IntFlag{
-			Name:   "graphite_port",
-			Value:  2003,
-			EnvVar: "GXC_GRAPHITE_PORT",
+			Name:   "statsd_prefix",
+			Value:  "gxc.",
+			Usage:  "statsd statistics prefix.",
+			EnvVar: "GXC_STATSD_PREFIX",
 		},
 	}
 
@@ -461,9 +489,8 @@ func main() {
 			c.String("listenAddr"),
 			c.String("connect"),
 			c.String("header"),
-			c.String("graphite_address"),
-			c.String("graphite_prefix"),
-			c.Int("graphite_port"),
+			c.String("statsd_address"),
+			c.String("statsd_prefix"),
 			c.Bool("looseCookie"),
 		)
 	}

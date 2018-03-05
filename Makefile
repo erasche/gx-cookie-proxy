@@ -1,31 +1,45 @@
-SRC := $(wildcard *.go)
 TARGET := gx-cookie-proxy
-VERSION := $(shell git describe --tags)
+
+NAMESPACE	:=github.com/erasche/gx-cookie-proxy
+WORKSPACE	:=$(GOPATH)/src/$(NAMESPACE)
+GO_SOURCES	:=$(wildcard *.go)
+GO_PACKAGES	:=$(dir $(GO_SOURCES))
+VERSION	:=$(shell git describe --tags --always)
+GO_FLAGS	:=-ldflags="-X main.version=$(VERSION) -X main.builddate=$(shell date --iso-8601=seconds --utc)"
+DEP_ARGS	:=-v
 
 all: $(TARGET)
+	echo $(WORKSPACE)
 
-vendor: glide.yaml glide.lock
-	go get github.com/Masterminds/glide/...
-	go install github.com/Masterminds/glide/...
-	glide install
+test: setup.lock
+	@cd $(WORKSPACE)\
+		&& go test $(addprefix $(NAMESPACE)/,$(GO_PACKAGES))
 
-gofmt: $(src)
-	find $(SRC) -exec gofmt -w '{}' \;
+setup.lock: $(WORKSPACE) vendor
+	@echo $(VERSION) > setup.lock
 
-qc_deps:
-	go get github.com/alecthomas/gometalinter
-	gometalinter --install --update
+fmt: $(GO_SOURCES)
+	gofmt -w $(GO_SOURCES)
+	goimports -w $(GO_SOURCES)
 
-qc: lint vet complexity
-	golint $(SRC)
-	gocyclo -over 10 $(SRC)
-	gometalinter .
+check: vet lint
 
-test: $(SRC) vendor gofmt
-	go test -v $(glide novendor)
+vet: $(GO_SOURCES)
+	go vet $(NAMESPACE)/
 
-$(TARGET): $(SRC) vendor gofmt
-	go build -ldflags "-X main.version=$(VERSION) -X main.builddate=`date -u +%Y-%m-%dT%H:%M:%SZ`" -o $@
+lint: $(GO_SOURCES)
+	golint $(NAMESPACE)/
+
+dep: $(WORKSPACE)
+	@cd $(WORKSPACE) && dep $(ARGS)
+
+vendor: Gopkg.toml Gopkg.lock
+	@cd $(WORKSPACE) && dep ensure $(DEP_ARGS)
+	@touch $@
+
+
+$(TARGET): $(SRC) setup.lock
+	go build $(GO_FLAGS) -o $@
 
 clean:
 	$(RM) $(TARGET)
@@ -35,7 +49,7 @@ release:
 	mkdir dist
 	go get github.com/mitchellh/gox
 	go get github.com/tcnksm/ghr
-	CGO_ENABLED=0 gox -ldflags "-X main.version=$(VERSION) -X main.builddate=`date -u +%Y-%m-%dT%H:%M:%SZ`" -output "dist/gx-cookie-proxy_{{.OS}}_{{.Arch}}" -os="linux"
+	CGO_ENABLED=0 gox $(GO_FLAGS) -os="linux"
 	ghr -u erasche -replace $(VERSION) dist/
 
 .PHONY: clean lint gofmt vet complexity qc qc_deps test clean release
