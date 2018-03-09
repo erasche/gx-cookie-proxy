@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
@@ -41,7 +42,8 @@ var (
 	version   string
 	builddate string
 	logger    *log.Logger
-	Metrics    *statsd.StatsdBuffer
+	Metrics   *statsd.StatsdClient
+	EmailSalt string
 )
 
 type Backend struct {
@@ -50,6 +52,7 @@ type Backend struct {
 	GalaxyDB      *sql.DB
 	GalaxyCipher  *blowfish.Cipher
 	Cache         *cache.Cache
+	EmailCache    *cache.Cache
 	QueryString   string
 	Header        string
 }
@@ -167,24 +170,46 @@ func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			r.Header[h.Header] = []string{email}
 
 			log.WithFields(log.Fields{
-				"user": email,
-				"path": r.URL.Path,
+				"user":   email,
+				"path":   r.URL.Path,
+				"metric": Metrics,
+				"t":      Metrics != nil,
+				"es": EmailSalt,
 			}).Info("Authenticated request")
-			if Metrics != nil{
-				Metrics.Gauge("requests.authenticated", 1)
+
+			if Metrics != nil {
+				Metrics.Incr("requests.authenticated", 1)
 				// Then log their email for checking individual users / who is online.
-				// TODO: disable this by default?
-				Metrics.Gauge("requests.authenticated."+strings.Replace(email, ".", "", -1), 1)
+				if len(EmailSalt) > 0 {
+					var cachedHashedEmail string
+					if EmailSalt == "do-not-encrypt" {
+						cachedHashedEmail = strings.Replace(string(email), ".", "-", -1)
+					} else {
+						cachedHashedEmail, found := backend.EmailCache.Get(email)
+
+						if !found {
+							algo := sha256.New()
+							algo.Write([]byte(EmailSalt + email))
+							cachedHashedEmail = string(hex.EncodeToString(algo.Sum(nil)))[0:12]
+							backend.EmailCache.Set(email, cachedHashedEmail, cache.DefaultExpiration)
+						}
+					}
+					metric_key := "requests.authenticated." + cachedHashedEmail
+					err := Metrics.Incr(metric_key, 1)
+					if err != nil { log.Error(err) }
+				}
 			}
 		} else {
 			log.Info("Unauthenticated request")
-			if Metrics != nil{
-						Metrics.Gauge("requests.unauthenticated", 1)
+			if Metrics != nil {
+				Metrics.Incr("requests.unauthenticated", 1)
 			}
 		}
 	} else {
 		log.Error(err)
 		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "Error: you don't have a galaxy cookie. Please login to Galaxy first.")
+		return
 	}
 
 	upgrade_websocket := false
@@ -246,12 +271,14 @@ func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func timedLookupEmailByCookie(b *Backend, cookie string) (string, bool){
+func timedLookupEmailByCookie(b *Backend, cookie string) (string, bool) {
 	start := time.Now()
 	email, found := lookupEmailByCookie(b, cookie)
 	t := time.Now()
 	elapsed := t.Sub(start)
-	Metrics.PrecisionTiming("query_timing", elapsed)
+	if Metrics != nil {
+		Metrics.PrecisionTiming("query_timing", elapsed)
+	}
 	return email, found
 }
 
@@ -286,10 +313,14 @@ func lookupEmailByCookie(b *Backend, cookie string) (email string, found bool) {
 		"hit": found,
 	}).Debug("Cache hit")
 	if found {
-		Metrics.Incr("cache.hit", 1)
+		if Metrics != nil {
+			Metrics.Incr("cache.hit", 1)
+		}
 		return cachedEmail.(string), found
 	}
-	Metrics.Incr("cache.miss", 1)
+	if Metrics != nil {
+		Metrics.Incr("cache.miss", 1)
+	}
 
 	safe_session_key := cookieToSessionKey(b, cookie)
 	err := b.GalaxyDB.QueryRow(b.QueryString, safe_session_key).Scan(&email)
@@ -310,26 +341,21 @@ func lookupEmailByCookie(b *Backend, cookie string) (email string, found bool) {
 	return email, false
 }
 
-func main2(galaxyDb, galaxySecret, listenAddr, connect, header, statsd_address, statsd_prefix string, looseCookie bool) {
+func main2(galaxyDb, galaxySecret, listenAddr, connect, header, statsd_address, statsd_prefix, statsd_email_salt string, looseCookie bool) {
 	db, err := sql.Open("postgres", galaxyDb)
 	if err != nil {
 		log.Fatal("Could not connect: %s", err)
 	}
 
-	var statsdclient *statsd.StatsdClient
 	if len(statsd_address) > 0 {
-		statsdclient = statsd.NewStatsdClient(statsd_address, statsd_prefix)
-		err := statsdclient.CreateSocket()
+		Metrics = statsd.NewStatsdClient(statsd_address, statsd_prefix)
+		err := Metrics.CreateSocket()
 		if err != nil {
 			log.Fatal("Could not configure StatsD connection")
 		}
-		interval := time.Second * 2 // aggregate stats and flush every 2 seconds
-		Metrics := statsd.NewStatsdBuffer(interval, statsdclient)
-		defer Metrics.Close()
 		log.Printf("Loaded StatsD connection: %#v", Metrics)
 	}
-
-
+	EmailSalt = statsd_email_salt
 
 	bf, err := blowfish.NewCipher([]byte(galaxySecret))
 	if err != nil {
@@ -342,6 +368,7 @@ func main2(galaxyDb, galaxySecret, listenAddr, connect, header, statsd_address, 
 		GalaxyDB:      db,
 		GalaxyCipher:  bf,
 		Cache:         cache.New(1*time.Hour, 5*time.Minute),
+		EmailCache:    cache.New(1*time.Hour, 5*time.Minute),
 		Header:        header,
 	}
 
@@ -464,6 +491,12 @@ func main() {
 			Usage:  "statsd statistics prefix.",
 			EnvVar: "GXC_STATSD_PREFIX",
 		},
+		cli.StringFlag{
+			Name:   "statsd_email_salt",
+			Value:  "",
+			Usage:  "This value is used for hasing emails before sending any data to the stats backend. An empty value disables sending of per-user data to the backend. The special value do-not-encrypt will not encrypt the emails in the keys..",
+			EnvVar: "GXC_STATSD_EMAIL_SALT",
+		},
 	}
 
 	app.Action = func(c *cli.Context) {
@@ -491,6 +524,7 @@ func main() {
 			c.String("header"),
 			c.String("statsd_address"),
 			c.String("statsd_prefix"),
+			c.String("statsd_email_salt"),
 			c.Bool("looseCookie"),
 		)
 	}

@@ -66,7 +66,7 @@ The gx-cookie-proxy is also configurable via environment variables:
 
 Parameter            | Env Var               | Usage
 -------------------- | -------------------   | -----------
-`--galaxyDb`         | `GALAXY_DB_URL`       | Galaxy Database Address
+`--galaxyDb`         | `GALAXY_DB_URL`       | Galaxy Database Address. If you need a non-standard search path you can append `?search_path=...` to your url.
 `--galaxySecret`     | `GALAXY_SECRET`       | Galaxy cookie secret
 `--listenAddr`       | `GXC_LISTEN_ADDR`     | Proxy listening address
 `--connect`          | `GXC_BACKEND_URL`     | Backend host + port to connect to
