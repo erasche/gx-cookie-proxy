@@ -17,21 +17,6 @@ import (
 )
 
 var (
-	// Require a valid cookie.
-	STRICT_QUERY_STRING = `
-SELECT galaxy_user.email
-FROM galaxy_session, galaxy_user
-WHERE galaxy_user.id = galaxy_session.user_id and galaxy_session.session_key=$1
-AND is_valid = true`
-
-	// Accept an outdated / superceded one.
-	LOOSE_QUERY_STRING = `
-SELECT galaxy_user.email
-FROM galaxy_session, galaxy_user
-WHERE galaxy_user.id = galaxy_session.user_id and galaxy_session.session_key=$1`
-)
-
-var (
 	version   string
 	builddate string
 	logger    *log.Logger

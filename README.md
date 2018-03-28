@@ -77,6 +77,10 @@ Parameter            | Env Var               | Usage
 
 # Changelog
 
+- 0.9.11
+	- Cleaned up code, refactor unnecessary complexity out
+	- Split into multiple files
+	- SystemD watchdog integration
 - 0.9.10
 	- replaced Graphite with StatsD (UDP by default, so tolerates network failures without requiring a restart.)
 	- Switched dependencies to dep.
