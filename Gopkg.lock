@@ -8,6 +8,12 @@
   version = "v1.0.5"
 
 [[projects]]
+  name = "github.com/coreos/go-systemd"
+  packages = ["daemon"]
+  revision = "40e2722dffead74698ca12a750f64ef313ddce05"
+  version = "v16"
+
+[[projects]]
   branch = "master"
   name = "github.com/lib/pq"
   packages = [
@@ -58,6 +64,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "7a42a5131e417dc43db7660130a4b6e7859a0b8736e6021317dda51b964c6a2d"
+  inputs-digest = "e824d0864977058d71d9f16b6fcc713e4e8dbd4bc899aa200324fd097e05a4c7"
   solver-name = "gps-cdcl"
   solver-version = 1

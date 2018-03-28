@@ -24,7 +24,7 @@ var (
 
 var hexReg, _ = regexp.Compile("[^a-fA-F0-9]+")
 
-func main2(galaxyDb, galaxySecret, listenAddr, connect, header, statsd_address, statsd_prefix string, looseCookie bool) {
+func main2(galaxyDb, galaxySecret, listenAddr, connect, header, statsd_address, statsd_prefix string, looseCookie bool, watchdog_enable bool, watchdog_interval, watchdog_expect int, watchdog_cookie string) {
 	db, err := sql.Open("postgres", galaxyDb)
 	if err != nil {
 		log.Fatal("Could not connect: %s", err)
@@ -38,18 +38,12 @@ func main2(galaxyDb, galaxySecret, listenAddr, connect, header, statsd_address, 
 		log.Fatal(err)
 	}
 
-	var query_string string
+	// Be strict by default.
+	query_string := STRICT_QUERY_STRING
 	if looseCookie {
 		// If we are being loose in our session cookie acceptance
 		query_string = LOOSE_QUERY_STRING
-	} else {
-		// Otherwise, be strict by default.
-		query_string = STRICT_QUERY_STRING
 	}
-
-	// and finally, extract frontends
-
-	mux := http.NewServeMux()
 
 	var request_handler http.Handler = &ProxyHandler{
 		Transport: &http.Transport{
@@ -73,9 +67,14 @@ func main2(galaxyDb, galaxySecret, listenAddr, connect, header, statsd_address, 
 		request_handler = NewRequestLogger(request_handler, *logger)
 	}
 
-	mux.Handle("/", request_handler)
 
+	mux := http.NewServeMux()
+	mux.Handle("/", request_handler)
 	srv := &http.Server{Handler: mux, Addr: listenAddr}
+
+	if watchdog_enable {
+		launch_watchdog(watchdog_interval, listenAddr, watchdog_expect, watchdog_cookie)
+	}
 
 	log.Printf("Listening on %s", listenAddr)
 	if err := srv.ListenAndServe(); err != nil {
@@ -148,6 +147,29 @@ func main() {
 			Usage:  "Format statsd output to be compatible with influxdb/telegraf",
 			EnvVar: "GXC_STATSD_INFLUXDB",
 		},
+		cli.BoolFlag{
+			Name:   "watchdog_enable",
+			Usage:  "Enable the SystemD watchdog integration",
+			EnvVar: "GXC_WATCHDOG",
+		},
+		cli.IntFlag{
+			Name:   "watchdog_interval",
+			Value:  30,
+			Usage:  "Watchdog check interval (seconds)",
+			EnvVar: "GXC_WATCHDOG_INTERVAL",
+		},
+		cli.IntFlag{
+			Name:   "watchdog_expect",
+			Value:  200,
+			Usage:  "Error code to expect for a successful request",
+			EnvVar: "GXC_WATCHDOG_EXPECT",
+		},
+		cli.StringFlag{
+			Name:   "watchdog_cookie",
+			Value:  "",
+			Usage:  "Galaxy cookie to provide to watchdog request",
+			EnvVar: "GXC_WATCHDOG_COOKIE",
+		},
 	}
 
 	app.Action = func(c *cli.Context) {
@@ -178,6 +200,10 @@ func main() {
 			c.String("statsd_address"),
 			c.String("statsd_prefix"),
 			c.Bool("looseCookie"),
+			c.Bool("watchdog_enable"),
+			c.Int("watchdog_interval"),
+			c.Int("watchdog_expect"),
+			c.String("watchdog_cookie"),
 		)
 	}
 
