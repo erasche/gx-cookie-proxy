@@ -1,21 +1,15 @@
 package main
 
 import (
-	"bufio"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"os"
 	"regexp"
-	"strings"
 	"time"
 
 	log "github.com/Sirupsen/logrus"
 	_ "github.com/lib/pq"
-	"github.com/quipo/statsd"
 
 	"github.com/patrickmn/go-cache"
 	"github.com/urfave/cli"
@@ -38,294 +32,12 @@ WHERE galaxy_user.id = galaxy_session.user_id and galaxy_session.session_key=$1`
 )
 
 var (
-	version         string
-	builddate       string
-	logger          *log.Logger
-	Metrics         *statsd.StatsdClient
-	statsd_influxdb bool
+	version   string
+	builddate string
+	logger    *log.Logger
 )
 
-type Backend struct {
-	Name          string
-	ConnectString string
-	GalaxyDB      *sql.DB
-	GalaxyCipher  *blowfish.Cipher
-	Cache         *cache.Cache
-	EmailCache    *cache.Cache
-	QueryString   string
-	Header        string
-}
-
 var hexReg, _ = regexp.Compile("[^a-fA-F0-9]+")
-
-type Frontend struct {
-	Name         string
-	BindString   string
-	HTTPS        bool
-	AddForwarded bool
-	Hosts        []string
-	Backends     []string
-	KeyFile      string
-	CertFile     string
-}
-
-func Copy(dest *bufio.ReadWriter, src *bufio.ReadWriter) {
-	buf := make([]byte, 40*1024)
-	for {
-		n, err := src.Read(buf)
-		if err != nil && err != io.EOF {
-			log.Printf("Read failed: %v", err)
-			return
-		}
-		if n == 0 {
-			return
-		}
-		dest.Write(buf[0:n])
-		dest.Flush()
-	}
-}
-
-func CopyBidir(conn1 io.ReadWriteCloser, rw1 *bufio.ReadWriter, conn2 io.ReadWriteCloser, rw2 *bufio.ReadWriter) {
-	finished := make(chan bool)
-
-	go func() {
-		Copy(rw2, rw1)
-		conn2.Close()
-		finished <- true
-	}()
-	go func() {
-		Copy(rw1, rw2)
-		conn1.Close()
-		finished <- true
-	}()
-
-	<-finished
-	<-finished
-}
-
-type RequestHandler struct {
-	Transport    *http.Transport
-	Frontend     *Frontend
-	HostBackends map[string]chan *Backend
-	Backends     chan *Backend
-	Header       string
-}
-
-func metric_incr(val string) {
-	if Metrics != nil {
-		var err error
-		if statsd_influxdb {
-			err = Metrics.Incr(",key="+val, 1)
-		} else {
-			err = Metrics.Incr(val, 1)
-		}
-		if err != nil {
-			log.Error(err)
-		}
-	}
-}
-
-func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	//log.Printf("incoming request: %#v", *r)
-	r.RequestURI = ""
-	r.URL.Scheme = "http"
-
-	if h.Frontend.AddForwarded {
-		remote_addr := r.RemoteAddr
-		idx := strings.LastIndex(remote_addr, ":")
-		if idx != -1 {
-			remote_addr = remote_addr[0:idx]
-			if remote_addr[0] == '[' && remote_addr[len(remote_addr)-1] == ']' {
-				remote_addr = remote_addr[1 : len(remote_addr)-1]
-			}
-		}
-		r.Header.Add("X-Forwarded-For", remote_addr)
-	}
-
-	var backend *Backend
-	if len(h.Frontend.Hosts) == 0 {
-		backend = <-h.Backends
-		r.URL.Host = backend.ConnectString
-		h.Backends <- backend
-	} else {
-		backend_list := h.HostBackends[r.Host]
-		if backend_list == nil {
-			if len(h.Frontend.Backends) == 0 {
-				http.Error(w, "no suitable backend found for request", http.StatusServiceUnavailable)
-				return
-			} else {
-				backend = <-h.Backends
-				r.URL.Host = backend.ConnectString
-				h.Backends <- backend
-			}
-		} else {
-			backend = <-backend_list
-			r.URL.Host = backend.ConnectString
-			backend_list <- backend
-		}
-	}
-
-	conn_hdr := ""
-	conn_hdrs := r.Header["Connection"]
-
-	if len(conn_hdrs) > 0 {
-		log.WithFields(log.Fields{
-			"headers": conn_hdrs,
-		}).Debug("Connection headers")
-		conn_hdr = conn_hdrs[0]
-	}
-
-	var email = ""
-	gx_cookie, err := r.Cookie("galaxysession")
-	if err == nil {
-		email, _ = timedLookupEmailByCookie(backend, gx_cookie.String())
-		if email != "" {
-			r.Header[h.Header] = []string{email}
-
-			log.WithFields(log.Fields{
-				"user": email,
-				"path": r.URL.Path,
-			}).Info("Authenticated request")
-
-			metric_incr("requests.authenticated")
-		} else {
-			metric_incr("requests.unauthenticated")
-		}
-	} else {
-		metric_incr("requests.nocookie")
-		log.Error(err)
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "Error: you don't have a galaxy cookie. Please login to Galaxy first.")
-		return
-	}
-
-	upgrade_websocket := false
-	if strings.ToLower(conn_hdr) == "upgrade" {
-		log.Debug("got Connection: Upgrade")
-
-		upgrade_hdrs := r.Header["Upgrade"]
-		//log.Printf("Upgrade headers: %v", upgrade_hdrs)
-		if len(upgrade_hdrs) > 0 {
-			upgrade_websocket = (strings.ToLower(upgrade_hdrs[0]) == "websocket")
-		}
-	}
-
-	if upgrade_websocket {
-		hj, ok := w.(http.Hijacker)
-
-		if !ok {
-			http.Error(w, "webserver doesn't support hijacking", http.StatusInternalServerError)
-			return
-		}
-
-		conn, bufrw, err := hj.Hijack()
-		defer conn.Close()
-
-		conn2, err := net.Dial("tcp", r.URL.Host)
-		if err != nil {
-			http.Error(w, "couldn't connect to backend server", http.StatusServiceUnavailable)
-			return
-		}
-		defer conn2.Close()
-
-		err = r.Write(conn2)
-		if err != nil {
-			log.Printf("writing WebSocket request to backend server failed: %v", err)
-			return
-		}
-
-		CopyBidir(conn, bufrw, conn2, bufio.NewReadWriter(bufio.NewReader(conn2), bufio.NewWriter(conn2)))
-
-	} else {
-
-		resp, err := h.Transport.RoundTrip(r)
-		if err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprintf(w, "Error: %v", err)
-			return
-		}
-
-		for k, v := range resp.Header {
-			for _, vv := range v {
-				w.Header().Add(k, vv)
-			}
-		}
-
-		w.WriteHeader(resp.StatusCode)
-
-		io.Copy(w, resp.Body)
-		resp.Body.Close()
-	}
-}
-
-func timedLookupEmailByCookie(b *Backend, cookie string) (string, bool) {
-	start := time.Now()
-	email, found := lookupEmailByCookie(b, cookie)
-	t := time.Now()
-	elapsed := t.Sub(start)
-	if Metrics != nil {
-		err := Metrics.PrecisionTiming("query_timing", elapsed)
-		if err != nil {
-			log.Error(err)
-		}
-	}
-	return email, found
-}
-
-func cookieToSessionKey(b *Backend, cookie string) (sessionKey string) {
-	data, err := hex.DecodeString(cookie[14:])
-	// If we can decode, exit early.
-	if err != nil {
-		return "will-never-match"
-	}
-
-	// Decrypt the session key
-	pt := make([]byte, 40)
-	for i := 0; i < len(data); i += blowfish.BlockSize {
-		j := i + blowfish.BlockSize
-		b.GalaxyCipher.Decrypt(pt[i:j], data[i:j])
-	}
-
-	// And strip all the exclamations from it.
-	session_key := strings.Replace(string(pt), "!", "", -1)
-	safe_session_key := hexReg.ReplaceAllString(session_key, "")
-
-	// Debugging
-	log.WithFields(log.Fields{
-		"sk": safe_session_key,
-	}).Debug("Session Key Decoded")
-	return safe_session_key
-}
-
-func lookupEmailByCookie(b *Backend, cookie string) (email string, found bool) {
-	cachedEmail, found := b.Cache.Get(cookie[14:])
-	log.WithFields(log.Fields{
-		"hit": found,
-	}).Debug("Cache hit")
-	if found {
-		metric_incr("cache.hit")
-		return cachedEmail.(string), found
-	}
-	metric_incr("cache.miss")
-
-	safe_session_key := cookieToSessionKey(b, cookie)
-	err := b.GalaxyDB.QueryRow(b.QueryString, safe_session_key).Scan(&email)
-
-	if err != nil {
-		if fmt.Sprintf("%s", err) == "sql: no rows in result set" {
-			log.Info("Invalid session key / cookie")
-		} else {
-			log.Error(err)
-		}
-		return "", false
-	}
-	log.WithFields(log.Fields{
-		"email": email,
-	}).Debug("Invalid session key / cookie")
-
-	b.Cache.Set(cookie[14:], email, cache.DefaultExpiration)
-	return email, false
-}
 
 func main2(galaxyDb, galaxySecret, listenAddr, connect, header, statsd_address, statsd_prefix string, looseCookie bool) {
 	db, err := sql.Open("postgres", galaxyDb)
@@ -333,73 +45,43 @@ func main2(galaxyDb, galaxySecret, listenAddr, connect, header, statsd_address, 
 		log.Fatal("Could not connect: %s", err)
 	}
 
-	if len(statsd_address) > 0 {
-		Metrics = statsd.NewStatsdClient(statsd_address, statsd_prefix)
-		err := Metrics.CreateSocket()
-		if err != nil {
-			log.Fatal("Could not configure StatsD connection")
-		}
-		log.Printf("Loaded StatsD connection: %#v", Metrics)
-	}
+	// Setup metrics stuff
+	configure_metrics(statsd_address, statsd_prefix)
 
 	bf, err := blowfish.NewCipher([]byte(galaxySecret))
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	backend := &Backend{
-		Name:          "default_b",
-		ConnectString: connect,
-		GalaxyDB:      db,
-		GalaxyCipher:  bf,
-		Cache:         cache.New(1*time.Hour, 5*time.Minute),
-		EmailCache:    cache.New(1*time.Hour, 5*time.Minute),
-		Header:        header,
-	}
-
+	var query_string string
 	if looseCookie {
 		// If we are being loose in our session cookie acceptance
-		backend.QueryString = LOOSE_QUERY_STRING
+		query_string = LOOSE_QUERY_STRING
 	} else {
 		// Otherwise, be strict by default.
-		backend.QueryString = STRICT_QUERY_STRING
+		query_string = STRICT_QUERY_STRING
 	}
 
 	// and finally, extract frontends
-	frontend := &Frontend{
-		Name:         "default_f",
-		BindString:   listenAddr,
-		Backends:     []string{"default_b"},
-		AddForwarded: true,
-	}
 
-	exit_chan := make(chan int)
-	go func(fe *Frontend) {
-		fe.Start(backend)
-		exit_chan <- 1
-	}(frontend)
-
-	// this shouldn't return
-	<-exit_chan
-}
-
-func (f *Frontend) Start(backend *Backend) {
 	mux := http.NewServeMux()
 
-	hosts_chans := make(map[string]chan *Backend)
-
-	backends_chan := make(chan *Backend, 1)
-	backends_chan <- backend
-
-	var request_handler http.Handler = &RequestHandler{
+	var request_handler http.Handler = &ProxyHandler{
 		Transport: &http.Transport{
 			DisableKeepAlives:  false,
 			DisableCompression: false,
 		},
-		Frontend:     f,
-		HostBackends: hosts_chans,
-		Backends:     backends_chan,
-		Header:       backend.Header,
+		// Frontend
+		AddForwarded: true,
+		// Backend
+		BackendScheme:  "http",
+		BackendAddress: connect,
+		GalaxyDB:       db,
+		GalaxyCipher:   bf,
+		Cache:          cache.New(1*time.Hour, 5*time.Minute),
+		EmailCache:     cache.New(1*time.Hour, 5*time.Minute),
+		Header:         header,
+		QueryString:    query_string,
 	}
 
 	if logger != nil {
@@ -408,11 +90,11 @@ func (f *Frontend) Start(backend *Backend) {
 
 	mux.Handle("/", request_handler)
 
-	srv := &http.Server{Handler: mux, Addr: f.BindString}
+	srv := &http.Server{Handler: mux, Addr: listenAddr}
 
-	log.Printf("Listening on %s", f.BindString)
+	log.Printf("Listening on %s", listenAddr)
 	if err := srv.ListenAndServe(); err != nil {
-		log.Printf("Starting frontend %s failed: %v", f.Name, err)
+		log.Printf("Starting proxy failed: %v", err)
 	}
 }
 
