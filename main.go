@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
@@ -39,11 +38,11 @@ WHERE galaxy_user.id = galaxy_session.user_id and galaxy_session.session_key=$1`
 )
 
 var (
-	version   string
-	builddate string
-	logger    *log.Logger
-	Metrics   *statsd.StatsdClient
-	EmailSalt string
+	version         string
+	builddate       string
+	logger          *log.Logger
+	Metrics         *statsd.StatsdClient
+	statsd_influxdb bool
 )
 
 type Backend struct {
@@ -112,6 +111,20 @@ type RequestHandler struct {
 	Header       string
 }
 
+func metric_incr(val string) {
+	if Metrics != nil {
+		var err error
+		if statsd_influxdb {
+			err = Metrics.Incr(",key="+val, 1)
+		} else {
+			err = Metrics.Incr(val, 1)
+		}
+		if err != nil {
+			log.Error(err)
+		}
+	}
+}
+
 func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	//log.Printf("incoming request: %#v", *r)
 	r.RequestURI = ""
@@ -170,42 +183,16 @@ func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			r.Header[h.Header] = []string{email}
 
 			log.WithFields(log.Fields{
-				"user":   email,
-				"path":   r.URL.Path,
-				"metric": Metrics,
-				"t":      Metrics != nil,
-				"es": EmailSalt,
+				"user": email,
+				"path": r.URL.Path,
 			}).Info("Authenticated request")
 
-			if Metrics != nil {
-				Metrics.Incr("requests.authenticated", 1)
-				// Then log their email for checking individual users / who is online.
-				if len(EmailSalt) > 0 {
-					var cachedHashedEmail string
-					if EmailSalt == "do-not-encrypt" {
-						cachedHashedEmail = strings.Replace(string(email), ".", "-", -1)
-					} else {
-						cachedHashedEmail, found := backend.EmailCache.Get(email)
-
-						if !found {
-							algo := sha256.New()
-							algo.Write([]byte(EmailSalt + email))
-							cachedHashedEmail = string(hex.EncodeToString(algo.Sum(nil)))[0:12]
-							backend.EmailCache.Set(email, cachedHashedEmail, cache.DefaultExpiration)
-						}
-					}
-					metric_key := "requests.authenticated." + cachedHashedEmail
-					err := Metrics.Incr(metric_key, 1)
-					if err != nil { log.Error(err) }
-				}
-			}
+			metric_incr("requests.authenticated")
 		} else {
-			log.Info("Unauthenticated request")
-			if Metrics != nil {
-				Metrics.Incr("requests.unauthenticated", 1)
-			}
+			metric_incr("requests.unauthenticated")
 		}
 	} else {
+		metric_incr("requests.nocookie")
 		log.Error(err)
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, "Error: you don't have a galaxy cookie. Please login to Galaxy first.")
@@ -277,7 +264,10 @@ func timedLookupEmailByCookie(b *Backend, cookie string) (string, bool) {
 	t := time.Now()
 	elapsed := t.Sub(start)
 	if Metrics != nil {
-		Metrics.PrecisionTiming("query_timing", elapsed)
+		err := Metrics.PrecisionTiming("query_timing", elapsed)
+		if err != nil {
+			log.Error(err)
+		}
 	}
 	return email, found
 }
@@ -313,14 +303,10 @@ func lookupEmailByCookie(b *Backend, cookie string) (email string, found bool) {
 		"hit": found,
 	}).Debug("Cache hit")
 	if found {
-		if Metrics != nil {
-			Metrics.Incr("cache.hit", 1)
-		}
+		metric_incr("cache.hit")
 		return cachedEmail.(string), found
 	}
-	if Metrics != nil {
-		Metrics.Incr("cache.miss", 1)
-	}
+	metric_incr("cache.miss")
 
 	safe_session_key := cookieToSessionKey(b, cookie)
 	err := b.GalaxyDB.QueryRow(b.QueryString, safe_session_key).Scan(&email)
@@ -341,7 +327,7 @@ func lookupEmailByCookie(b *Backend, cookie string) (email string, found bool) {
 	return email, false
 }
 
-func main2(galaxyDb, galaxySecret, listenAddr, connect, header, statsd_address, statsd_prefix, statsd_email_salt string, looseCookie bool) {
+func main2(galaxyDb, galaxySecret, listenAddr, connect, header, statsd_address, statsd_prefix string, looseCookie bool) {
 	db, err := sql.Open("postgres", galaxyDb)
 	if err != nil {
 		log.Fatal("Could not connect: %s", err)
@@ -355,7 +341,6 @@ func main2(galaxyDb, galaxySecret, listenAddr, connect, header, statsd_address, 
 		}
 		log.Printf("Loaded StatsD connection: %#v", Metrics)
 	}
-	EmailSalt = statsd_email_salt
 
 	bf, err := blowfish.NewCipher([]byte(galaxySecret))
 	if err != nil {
@@ -491,11 +476,10 @@ func main() {
 			Usage:  "statsd statistics prefix.",
 			EnvVar: "GXC_STATSD_PREFIX",
 		},
-		cli.StringFlag{
-			Name:   "statsd_email_salt",
-			Value:  "",
-			Usage:  "This value is used for hasing emails before sending any data to the stats backend. An empty value disables sending of per-user data to the backend. The special value do-not-encrypt will not encrypt the emails in the keys..",
-			EnvVar: "GXC_STATSD_EMAIL_SALT",
+		cli.BoolFlag{
+			Name:   "statsd_influxdb",
+			Usage:  "Format statsd output to be compatible with influxdb/telegraf",
+			EnvVar: "GXC_STATSD_INFLUXDB",
 		},
 	}
 
@@ -516,6 +500,8 @@ func main() {
 			panic("Unknown log level")
 		}
 
+		statsd_influxdb = c.Bool("statsd_influxdb")
+
 		main2(
 			c.String("galaxyDb"),
 			c.String("galaxySecret"),
@@ -524,7 +510,6 @@ func main() {
 			c.String("header"),
 			c.String("statsd_address"),
 			c.String("statsd_prefix"),
-			c.String("statsd_email_salt"),
 			c.Bool("looseCookie"),
 		)
 	}
