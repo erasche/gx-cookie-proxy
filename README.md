@@ -113,4 +113,4 @@ MIT
 # Authors
 
 - Original Drunken Hipster Proxy - Andreas Krennmair <ak@synflood.at>
-- Galaxy Portions - Eric Rasche <esr@tamu.edu>
+- Galaxy Portions - Helena Rasche <hxr@hx42.org>
